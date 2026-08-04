@@ -25,7 +25,12 @@ class TranscriptionClient {
             val usage: Usage? = null,
         ) : Result
 
-        data class Error(val message: String, val retryable: Boolean) : Result
+        data class Error(
+            val message: String,
+            val retryable: Boolean,
+            val code: String = "UNKNOWN",
+            val status: Int = 0,
+        ) : Result
     }
 
     data class Timings(
@@ -95,7 +100,7 @@ class TranscriptionClient {
             if (code in 200..299) {
                 val json = JSONObject(body)
                 val text = json.optString("text").trim()
-                if (text.isEmpty()) Result.Error("The transcription was empty. Please try again.", true)
+                if (text.isEmpty()) Result.Error("The transcription was empty. Please try again.", true, "EMPTY_RESULT")
                 else Result.Success(
                     text = text,
                     rawText = json.optString("rawText"),
@@ -113,7 +118,7 @@ class TranscriptionClient {
                 )
             } else parseError(body, code)
         } catch (_: Exception) {
-            Result.Error("Could not reach WoVoice. Check the VPN and try again.", true)
+            Result.Error("Could not reach WoVoice. Check your connection and try again.", true, "NETWORK_UNAVAILABLE")
         } finally {
             activeConnection.compareAndSet(connection, null)
             connection.disconnect()
@@ -143,7 +148,7 @@ class TranscriptionClient {
         val code = connection.responseCode
         block(code, readResponse(connection, code))
     } catch (_: Exception) {
-        Result.Error("Could not reach WoVoice. Check the VPN and try again.", true)
+        Result.Error("Could not reach WoVoice. Check your connection and try again.", true, "NETWORK_UNAVAILABLE")
     } finally {
         activeConnection.compareAndSet(connection, null)
         connection.disconnect()
@@ -169,8 +174,10 @@ class TranscriptionClient {
         Result.Error(
             error?.optString("message")?.takeIf(String::isNotBlank) ?: "Transcription failed ($code).",
             error?.optBoolean("retryable", code >= 500) ?: (code >= 500),
+            error?.optString("code")?.takeIf(String::isNotBlank) ?: "HTTP_$code",
+            code,
         )
-    }.getOrElse { Result.Error("Transcription failed ($code).", code >= 500) }
+    }.getOrElse { Result.Error("Transcription failed ($code).", code >= 500, "HTTP_$code", code) }
 
     private fun parseUsage(value: JSONObject?): Usage? {
         value ?: return null
@@ -208,7 +215,7 @@ class TranscriptionClient {
         URI("${base.toASCIIString()}$path").toURL()
     }.getOrNull()
 
-    private fun invalidUrl() = Result.Error("Enter a valid HTTPS Worker URL in WoVoice settings.", false)
+    private fun invalidUrl() = Result.Error("WoVoice has an invalid service address.", false, "INVALID_URL")
 
     private companion object {
         const val MAX_RESPONSE_CHARS = 1_000_000

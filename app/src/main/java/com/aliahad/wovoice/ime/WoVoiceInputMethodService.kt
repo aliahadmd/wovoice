@@ -20,9 +20,12 @@ import com.aliahad.wovoice.core.EditorSessionGuard
 import com.aliahad.wovoice.core.KeyboardState
 import com.aliahad.wovoice.core.TextCommitPolicy
 import com.aliahad.wovoice.network.TranscriptionClient
+import com.aliahad.wovoice.account.AccountResult
+import com.aliahad.wovoice.account.SessionManager
 import com.aliahad.wovoice.data.WoVoiceRepository
 import com.aliahad.wovoice.settings.SettingsStore
 import com.aliahad.wovoice.settings.SetupActivity
+import com.aliahad.wovoice.sync.SyncCoordinator
 import com.aliahad.wovoice.voice.VoiceCaptureService
 import com.aliahad.wovoice.voice.WavRecorder
 import kotlinx.coroutines.CoroutineScope
@@ -41,6 +44,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
     private val sessions = EditorSessionGuard()
     private val client = TranscriptionClient()
     private lateinit var settings: SettingsStore
+    private lateinit var account: SessionManager
     private val repository by lazy { WoVoiceRepository(this) }
     private var keyboard: WoVoiceKeyboardView? = null
     private var state: KeyboardState = KeyboardState.VoiceIdle
@@ -72,6 +76,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
     override fun onCreate() {
         super.onCreate()
         settings = SettingsStore(this)
+        account = SessionManager.get(this)
         bound = bindService(
             Intent(this, VoiceCaptureService::class.java),
             serviceConnection,
@@ -152,8 +157,8 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
             showError("Allow microphone access in WoVoice settings.")
             return
         }
-        if (!settings.isConfigured()) {
-            showError("Add your Worker URL and device token in settings.")
+        if (!account.signedIn) {
+            showError("Sign in to WoVoice to use voice input.")
             return
         }
         cancelActiveWork(resetState = false)
@@ -272,19 +277,38 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
 
     private fun transcribe(file: File, session: Long, audioDurationMs: Long) {
         val workerUrl = settings.workerUrl
-        val token = settings.deviceToken()
-        if (token.isNullOrBlank()) {
-            file.delete()
-            showError("The device token is missing. Open WoVoice settings.")
-            return
-        }
         networkJob?.cancel()
         networkJob = scope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
                     repository.importGlossary(settings.glossary)
                     val glossary = repository.bestGlossary().ifEmpty { settings.glossary }
-                    client.transcribe(workerUrl, token, file, sentenceStartForCapture, glossary)
+                    val auth = account.validAccessToken()
+                    if (auth is AccountResult.Error) {
+                        TranscriptionClient.Result.Error(auth.message, auth.retryable, auth.code, auth.status)
+                    } else {
+                        val token = (auth as AccountResult.Success).value
+                        val first = client.transcribe(workerUrl, token, file, sentenceStartForCapture, glossary)
+                        if (first is TranscriptionClient.Result.Error &&
+                            (first.code == "TOKEN_EXPIRED" || first.code == "AUTH_REQUIRED")
+                        ) {
+                            when (val refreshed = account.refreshAfterRejected(token)) {
+                                is AccountResult.Success -> client.transcribe(
+                                    workerUrl,
+                                    refreshed.value,
+                                    file,
+                                    sentenceStartForCapture,
+                                    glossary,
+                                )
+                                is AccountResult.Error -> TranscriptionClient.Result.Error(
+                                    refreshed.message,
+                                    refreshed.retryable,
+                                    refreshed.code,
+                                    refreshed.status,
+                                )
+                            }
+                        } else first
+                    }
                 }
                 if (!sessions.isActive(session) || session != currentSession || !isInputViewShown) return@launch
                 when (result) {
@@ -310,6 +334,9 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
                     audioDurationMs = audioDurationMs,
                     keepHistory = settings.historyEnabled,
                 )
+                if (settings.vaultRecoveryAcknowledged) {
+                    SyncCoordinator.get(this@WoVoiceInputMethodService).syncNow()
+                }
             }
             if (settings.learningSuggestionsEnabled && EditorPolicy.allowsLearning(currentInputEditorInfo)) {
                 pendingCorrection = PendingCorrection(

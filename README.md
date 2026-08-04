@@ -12,12 +12,12 @@
 <p align="center">
   <a href="https://github.com/aliahadmd/wovoice/releases/latest"><strong>Download the latest APK</strong></a>
   ·
-  <a href="https://wovoice-transcription.aliahad.workers.dev"><strong>Worker status</strong></a>
+  <a href="https://wovoice.aliahad.com/status"><strong>Service status</strong></a>
 </p>
 
 WoVoice lets you speak into any normal Android text field instead of typing everything by hand. It listens after one tap, processes the complete thought after a second tap, adds punctuation and light corrections, then inserts the final text exactly where you started.
 
-The app is designed as a personal keyboard rather than a Play Store product. Its main recognition language is **English (India)**, with special attention to South Asian pronunciation, names, numbers, punctuation, and everyday sentences.
+WoVoice is a free public beta distributed directly through GitHub rather than the Play Store. Its main recognition language is **English (India)**, with special attention to South Asian pronunciation, names, numbers, punctuation, and everyday sentences.
 
 <p align="center">
   <img src="docs/images/wovoice-home.png" width="340" alt="WoVoice Home dashboard">
@@ -64,7 +64,7 @@ The app is designed as a personal keyboard rather than a Play Store product. Its
 
 Download the current APK from [GitHub Releases](https://github.com/aliahadmd/wovoice/releases/latest). WoVoice supports Android 7.0 and later and is optimized for the Redmi K80 Pro on Android 16.
 
-The speech service is hosted at [wovoice-transcription.aliahad.workers.dev](https://wovoice-transcription.aliahad.workers.dev). The URL is safe to publish, but transcription requests require a private device token. Tokens are never included in the APK or repository. Forks should deploy their own Worker and create their own token by following [the Worker deployment guide](worker/README.md).
+The account, synchronization, and speech service is hosted at [wovoice.aliahad.com](https://wovoice.aliahad.com). Voice input uses a verified WoVoice account; there is no shared device token to copy into the app. The manual keyboard remains available while signed out or offline.
 
 ## First-time setup
 
@@ -75,18 +75,20 @@ Open WoVoice and go to **Settings → Setup**.
 3. In Android's keyboard settings, turn on **WoVoice**.
 4. Return to the app and tap **Choose**.
 5. Select **WoVoice** as the active keyboard.
-6. Under **Private Cloudflare Worker**, enter the private Worker address and device token.
-7. Tap **Save and test connection**.
+6. Under **Account**, tap **Sign in or create account**.
+7. Enter your email in the secure WoVoice page, complete the security check, and enter the six-digit code.
+8. Return to WoVoice and save the recovery key when encrypted sync is offered.
 
 The Home readiness card should show:
 
 - **Microphone ready**
 - **WoVoice selected**
-- **Worker configured**
+- **Account ready**
+- **Network available**
 
 Android may show a standard warning when enabling any downloaded keyboard. Confirm that the keyboard name is WoVoice before accepting.
 
-> Speech-to-text requires an internet connection to the private Worker. The manual keyboard continues to work without the speech service.
+> Speech-to-text requires an internet connection and a valid WoVoice account. The manual keyboard continues to work without either one.
 
 ## Using voice dictation
 
@@ -282,7 +284,7 @@ Only approved terms may be included in later transcription requests. The surroun
 Settings is organized into these areas:
 
 - **Setup:** microphone permission, keyboard enablement, active-keyboard picker, and readiness.
-- **Private Cloudflare Worker:** Worker address, encrypted device token, and connection test.
+- **Account:** verified email, today’s free quota, sync state, recovery controls, signed-in devices, logout, and account deletion.
 - **Voice & language:** English (India), light polish, punctuation, and spoken line commands.
 - **Keyboard:** haptics, animations, waveform, and manual keyboard preferences.
 - **History & analytics:** local History, cost display, clear History, and reset analytics.
@@ -309,8 +311,10 @@ WoVoice is designed to collect as little information as possible:
 
 - The active recording is written only to temporary app-private storage.
 - Temporary audio is deleted after success, failure, cancellation, timeout, keyboard dismissal, or cleanup.
-- History, analytics, and Dictionary entries remain in the app's private phone storage.
-- The device token is encrypted with Android's secure Keystore.
+- History, analytics, and Dictionary entries are partitioned by account in the app's private phone storage.
+- Optional synchronization encrypts each approved record on the phone before upload. Cloudflare stores ciphertext, not readable history or Dictionary text.
+- The rotating refresh token and local vault key are encrypted with Android Keystore-backed AES-GCM.
+- The recovery secret is shown only after device-credential confirmation and can be transferred by manual key or offline QR scan.
 - Phone backups are disabled for WoVoice data.
 - Surrounding text, clipboard contents, contacts, typing history, and source-app identity are not sent.
 - Correction context stays on the phone; only approved Dictionary terms can be used as glossary hints.
@@ -324,6 +328,8 @@ Three different cleanup actions are available because they affect different info
 | **Reset analytics** | Anonymous daily usage totals and calculated insights. |
 | **Clear all data** | History, analytics, Dictionary data, and other local WoVoice information. |
 
+Account deletion requires a fresh email code and removes sessions, synchronized ciphertext, and identifiable service usage. See [Delete your account](https://wovoice.aliahad.com/delete-account).
+
 ## Understanding messages and states
 
 | Message or state | Meaning |
@@ -332,7 +338,9 @@ Three different cleanup actions are available because they affect different info
 | **Tap again to finish** | Recording is active. |
 | **Thinking / Processing** | Audio is being recognized and lightly polished. |
 | **No clear speech** | The recording was silent or too quiet to use. It is discarded locally. |
-| **Connection failed** | The Worker could not be reached or authentication was rejected. |
+| **Connection failed** | The WoVoice service could not be reached. |
+| **Sign in to use voice** | The account session is missing or expired; the manual keyboard still works. |
+| **Daily limit reached** | The account has used its free 10 minutes for the current UTC day. |
 | **Try again** | No text was inserted; return to the same field and record again. |
 
 ## Troubleshooting
@@ -355,9 +363,9 @@ Three different cleanup actions are available because they affect different info
 ### Recording works but transcription fails
 
 - Check Wi-Fi or mobile data.
-- If the private Worker requires the VPN, confirm the VPN is active.
-- Open **Settings → Private Cloudflare Worker** and run **Save and test connection**.
-- Re-enter the current device token if authentication is rejected.
+- Open **Settings → Account** and confirm the verified email and quota appear.
+- If the session expired, tap **Sign in** and complete the email code again.
+- Open [WoVoice service status](https://wovoice.aliahad.com/status) to check API availability.
 
 ### A name or term is wrong
 
@@ -386,6 +394,7 @@ The destination app controls the requested editor action. WoVoice follows that r
 
 - Recognition is currently focused on English (India).
 - Each recording is limited to 60 seconds.
-- Speech-to-text requires internet access to the private Worker.
+- Speech-to-text requires internet access and a verified account.
+- Free beta accounts currently receive 600 validated audio seconds per UTC day.
 - The manual keyboard has no autocorrect or word-suggestion strip.
 - Cost and neuron figures are estimates for WoVoice requests, not actual account billing.
