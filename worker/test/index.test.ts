@@ -84,6 +84,21 @@ describe("WoVoice Worker", () => {
     expect((await response.json()) as object).toMatchObject({ ok: true });
   });
 
+  it("requires an upgrade after the legacy migration deadline", async () => {
+    const environment = fakeEnv();
+    environment.LEGACY_AUTH_DEADLINE = "2000-01-01T00:00:00.000Z";
+    const response = await createHandler(fakeServices())(
+      new Request("https://wovoice-transcription.aliahad.workers.dev/v1/health", {
+        headers: { authorization: `Bearer ${LEGACY_TOKEN}` },
+      }),
+      environment,
+    );
+    expect(response.status).toBe(426);
+    expect((await response.json()) as object).toMatchObject({
+      error: { code: "UPGRADE_REQUIRED", retryable: false },
+    });
+  });
+
   it("enforces the transcription burst limiter", async () => {
     const environment = fakeEnv(false);
     const response = await createHandler(fakeServices())(

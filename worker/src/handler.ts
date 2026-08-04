@@ -274,16 +274,18 @@ function round(value: number, places: number): number {
 }
 
 async function authenticatePrincipal(request: Request, env: AppEnv, url: URL): Promise<Principal> {
-  if (await acceptsLegacyToken(request, env, url)) {
-    return { userId: "legacy", sessionId: "legacy", legacy: true };
+  if (url.hostname === "wovoice-transcription.aliahad.workers.dev" && await matchesLegacyToken(request, env)) {
+    const deadline = Date.parse(env.LEGACY_AUTH_DEADLINE);
+    if (Number.isFinite(deadline) && Date.now() < deadline) {
+      return { userId: "legacy", sessionId: "legacy", legacy: true };
+    }
+    throw new ApiError(426, "UPGRADE_REQUIRED", false, "Upgrade WoVoice to continue using voice input.");
   }
   return authenticateAccess(request, env);
 }
 
-async function acceptsLegacyToken(request: Request, env: AppEnv, url: URL): Promise<boolean> {
-  if (url.hostname !== "wovoice-transcription.aliahad.workers.dev") return false;
-  const deadline = Date.parse(env.LEGACY_AUTH_DEADLINE);
-  if (!Number.isFinite(deadline) || Date.now() >= deadline || !env.CLIENT_TOKEN) return false;
+async function matchesLegacyToken(request: Request, env: AppEnv): Promise<boolean> {
+  if (!env.CLIENT_TOKEN) return false;
   const authorization = request.headers.get("authorization") ?? "";
   const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   const [actualHash, expectedHash] = await Promise.all([
