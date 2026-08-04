@@ -1,0 +1,14 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.WoVoice" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#8B7CFF</item>
+        <item name="colorPrimaryVariant">#6E5FE8</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#A99FFF</item>
+        <item name="colorOnSecondary">#17171A</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:navigationBarColor">#17171A</item>
+        <item name="android:statusBarColor">#17171A</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">false</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
