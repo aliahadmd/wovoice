@@ -27,6 +27,15 @@ npm run check
 3. Deploy staging with `npx wrangler deploy --env staging`.
 4. Enter the resulting HTTPS URL and the same device token in WoVoice settings.
 
+For production:
+
+1. Validate with `npx wrangler deploy --dry-run`.
+2. Deploy with `npx wrangler deploy`.
+3. Create the production secret with `npx wrangler secret put CLIENT_TOKEN`.
+4. Test `GET /v1/health` with the bearer token before distributing an APK.
+
+Current public API status: [wovoice-transcription.aliahad.workers.dev](https://wovoice-transcription.aliahad.workers.dev). The root status response is public; health and transcription endpoints remain authenticated.
+
 To benchmark Nova-3, deploy a staging environment with `ASR_MODEL` set to `nova-3`.
 Keep the production selection pinned to the result of the personal 30-recording
 benchmark.

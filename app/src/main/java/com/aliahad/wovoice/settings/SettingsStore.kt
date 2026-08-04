@@ -78,6 +78,6 @@ class SettingsStore(context: Context) {
         const val KEY_HAPTICS = "haptics_enabled"
         const val KEY_ANIMATIONS = "animations_enabled"
         const val KEY_WAVEFORM = "waveform_enabled"
-        const val DEFAULT_WORKER_URL = "https://wovoice-transcription-staging.aliahad.workers.dev"
+        const val DEFAULT_WORKER_URL = "https://wovoice-transcription.aliahad.workers.dev"
     }
 }

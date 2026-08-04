@@ -16,3 +16,7 @@ local.properties
 /worker/.dev.vars
 /worker/node_modules
 /worker/.wrangler
+*.jks
+*.keystore
+*.p12
+/release

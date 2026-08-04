@@ -18,6 +18,17 @@ const POLISH_OUTPUT_USD_PER_MILLION = 0.3;
 
 export function createHandler(services: Services = productionServices) {
   return async (request: Request, env: AppEnv): Promise<Response> => {
+    const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/") {
+      return Response.json({
+        name: "WoVoice Transcription API",
+        status: "online",
+        apiVersion: "v1",
+        documentation: "https://github.com/aliahadmd/wovoice",
+        authentication: "Bearer token required for health and transcription endpoints",
+      });
+    }
+
     const requestId = crypto.randomUUID();
     const startedAt = performance.now();
     let audioBytes = 0;
@@ -36,7 +47,6 @@ export function createHandler(services: Services = productionServices) {
         throw new ApiError(429, "RATE_LIMITED", true, "Too many recordings. Please wait a moment.");
       }
 
-      const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/v1/health") {
         status = 200;
         return Response.json({ requestId, ok: true }, { status });

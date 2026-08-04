@@ -19,9 +19,23 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    val releaseKeystorePath = providers.environmentVariable("WOVOICE_KEYSTORE_PATH").orNull
+    if (!releaseKeystorePath.isNullOrBlank()) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = providers.environmentVariable("WOVOICE_STORE_PASSWORD").get()
+                keyAlias = providers.environmentVariable("WOVOICE_KEY_ALIAS").get()
+                keyPassword = providers.environmentVariable("WOVOICE_KEY_PASSWORD").get()
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            if (!releaseKeystorePath.isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                 enable = true
             }

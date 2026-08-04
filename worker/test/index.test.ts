@@ -7,6 +7,19 @@ import { validateWav } from "../src/wav";
 const TOKEN = "test-device-token-with-enough-entropy";
 
 describe("WoVoice Worker", () => {
+  it("provides a public status response without exposing protected data", async () => {
+    const response = await createHandler(fakeServices())(
+      new Request("https://worker.test/"),
+      fakeEnv(),
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json()) as object).toMatchObject({
+      name: "WoVoice Transcription API",
+      status: "online",
+      apiVersion: "v1",
+    });
+  });
+
   it("rejects an invalid device token before parsing the body", async () => {
     const response = await createHandler(fakeServices())(
       new Request("https://worker.test/v1/transcriptions", {
