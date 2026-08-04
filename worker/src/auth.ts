@@ -169,10 +169,18 @@ async function startAuthentication(
   }
 
   const monthKey = new Date(now).toISOString().slice(0, 7);
-  const monthly = await env.DB.batch([
-    env.DB.prepare("INSERT OR IGNORE INTO service_monthly_usage(month_key, verification_emails) VALUES(?, 0)").bind(monthKey),
-    env.DB.prepare("UPDATE service_monthly_usage SET verification_emails = verification_emails + 1 WHERE month_key = ?").bind(monthKey),
-  ]);
+  let monthly: D1Result[];
+  try {
+    monthly = await env.DB.batch([
+      env.DB.prepare("INSERT OR IGNORE INTO service_monthly_usage(month_key, verification_emails) VALUES(?, 0)").bind(monthKey),
+      env.DB.prepare("UPDATE service_monthly_usage SET verification_emails = verification_emails + 1 WHERE month_key = ?").bind(monthKey),
+    ]);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("EMAIL_RATE_LIMITED")) {
+      throw new ApiError(503, "EMAIL_RATE_LIMITED", true, "WoVoice has reached its monthly verification limit.", 3_600);
+    }
+    throw error;
+  }
   if ((monthly[1]?.meta.changes ?? 0) !== 1) {
     throw new ApiError(503, "EMAIL_RATE_LIMITED", true, "WoVoice has reached its monthly verification limit.", 3_600);
   }
