@@ -34,7 +34,41 @@ export interface Services {
   ): Promise<PolishResult>;
 }
 
-export type AppEnv = Omit<Env, "ASR_MODEL"> & {
+export type AppEnv = Omit<
+  Env,
+  | "ASR_MODEL"
+  | "APP_ORIGIN"
+  | "ENVIRONMENT"
+  | "TURNSTILE_SITE_KEY"
+  | "LEGACY_AUTH_DEADLINE"
+  | "AUTH_MASTER_KEY"
+  | "PII_KEY"
+  | "TURNSTILE_SECRET"
+  | "CLIENT_TOKEN"
+> & {
   ASR_MODEL: string;
-  CLIENT_TOKEN: string;
+  AUTH_MASTER_KEY: string;
+  PII_KEY: string;
+  TURNSTILE_SECRET: string;
+  TURNSTILE_SITE_KEY: string;
+  APP_ORIGIN: string;
+  ENVIRONMENT: string;
+  LEGACY_AUTH_DEADLINE: string;
+  CLIENT_TOKEN?: string;
 };
+
+export interface AuthServices {
+  verifyTurnstile(
+    env: AppEnv,
+    token: string,
+    remoteIp: string | null,
+    idempotencyKey: string,
+  ): Promise<boolean>;
+  sendCode(env: AppEnv, email: string, code: string): Promise<void>;
+}
+
+export interface Principal {
+  userId: string;
+  sessionId: string;
+  legacy: boolean;
+}

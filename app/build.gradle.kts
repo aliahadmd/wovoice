@@ -13,8 +13,8 @@ android {
         applicationId = "com.aliahad.wovoice"
         minSdk = 24
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -32,7 +32,16 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".staging"
+            buildConfigField("String", "WOVOICE_BASE_URL", "\"https://staging.wovoice.aliahad.com\"")
+            buildConfigField("boolean", "ALLOW_CUSTOM_ENDPOINT", "true")
+            manifestPlaceholders["authHost"] = "staging.wovoice.aliahad.com"
+        }
         release {
+            buildConfigField("String", "WOVOICE_BASE_URL", "\"https://wovoice.aliahad.com\"")
+            buildConfigField("boolean", "ALLOW_CUSTOM_ENDPOINT", "false")
+            manifestPlaceholders["authHost"] = "wovoice.aliahad.com"
             if (!releaseKeystorePath.isNullOrBlank()) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -40,6 +49,9 @@ android {
                 enable = true
             }
         }
+    }
+    buildFeatures {
+        buildConfig = true
     }
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
@@ -55,6 +67,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.recyclerview)
+    implementation(libs.androidx.browser)
+    implementation(libs.zxing.android.embedded)
     ksp(libs.androidx.room.compiler)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(libs.junit)

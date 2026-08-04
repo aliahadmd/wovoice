@@ -1,7 +1,10 @@
 import { ApiError, errorResponse } from "./errors";
+import { authenticateAccess, handleAccountRoute, handleAuthRoute, productionAuthServices } from "./auth";
 import { productionServices } from "./models";
 import { parseOptions } from "./options";
-import type { AppEnv, Services } from "./types";
+import { completeQuota, releaseQuota, reserveQuota, type QuotaReservation } from "./quota";
+import { handleSyncRoute } from "./sync";
+import type { AppEnv, AuthServices, Principal, Services } from "./types";
 import { chooseSafePolish } from "./validation";
 import { readBodyLimited, validateWav } from "./wav";
 
@@ -15,17 +18,32 @@ const POLISH_INPUT_NEURONS_PER_MILLION = 18_182;
 const POLISH_OUTPUT_NEURONS_PER_MILLION = 27_273;
 const POLISH_INPUT_USD_PER_MILLION = 0.2;
 const POLISH_OUTPUT_USD_PER_MILLION = 0.3;
+const RELEASE_CERT_SHA256 =
+  "3A:E4:93:35:28:83:E2:7F:98:ED:93:60:A4:C2:95:6B:66:2C:24:1C:74:FC:2B:B8:5C:5A:C1:6F:3F:2F:D1:D4";
+const DEBUG_CERT_SHA256 =
+  "EC:F2:BE:43:B8:6F:94:29:CF:7F:21:2D:90:F6:7D:AC:04:A7:31:20:7A:BA:58:11:C4:82:B3:13:36:11:67:19";
 
-export function createHandler(services: Services = productionServices) {
+export function createHandler(
+  services: Services = productionServices,
+  authServices: AuthServices = productionAuthServices,
+) {
   return async (request: Request, env: AppEnv): Promise<Response> => {
     const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname === "/") {
+    if (request.method === "GET" && url.pathname === "/.well-known/assetlinks.json") {
+      return Response.json(androidAssetLinks(env), {
+        headers: {
+          "cache-control": "public, max-age=300",
+          "content-type": "application/json; charset=utf-8",
+        },
+      });
+    }
+    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/v1/status")) {
       return Response.json({
-        name: "WoVoice Transcription API",
+        name: "WoVoice API",
         status: "online",
         apiVersion: "v1",
         documentation: "https://github.com/aliahadmd/wovoice",
-        authentication: "Bearer token required for health and transcription endpoints",
+        authentication: "Passwordless WoVoice account required for protected endpoints",
       });
     }
 
@@ -38,13 +56,31 @@ export function createHandler(services: Services = productionServices) {
     let asrMs = 0;
     let polishMs = 0;
     let totalNeurons: number | null = null;
+    let principal: Principal | null = null;
+    let reservation: QuotaReservation | null = null;
+    let quotaCompleted = false;
 
     try {
-      const token = await authenticate(request, env.CLIENT_TOKEN);
-      const rateKey = await digestHex(token);
-      const rate = await env.RATE_LIMITER.limit({ key: rateKey });
+      const authResponse = await handleAuthRoute(request, env, authServices, requestId);
+      if (authResponse) {
+        status = authResponse.status;
+        return authResponse;
+      }
+      const accountResponse = await handleAccountRoute(request, env, requestId);
+      if (accountResponse) {
+        status = accountResponse.status;
+        return accountResponse;
+      }
+      const syncResponse = await handleSyncRoute(request, env, requestId);
+      if (syncResponse) {
+        status = syncResponse.status;
+        return syncResponse;
+      }
+
+      principal = await authenticatePrincipal(request, env, url);
+      const rate = await env.RATE_LIMITER.limit({ key: principal.userId });
       if (!rate.success) {
-        throw new ApiError(429, "RATE_LIMITED", true, "Too many recordings. Please wait a moment.");
+        throw new ApiError(429, "RATE_LIMITED", true, "Too many recordings. Please wait a moment.", 60);
       }
 
       if (request.method === "GET" && url.pathname === "/v1/health") {
@@ -74,6 +110,9 @@ export function createHandler(services: Services = productionServices) {
       const audio = await file.arrayBuffer();
       audioBytes = audio.byteLength;
       const wav = validateWav(audio);
+      if (!principal.legacy) {
+        reservation = await reserveQuota(env, principal.userId, requestId, wav.durationSeconds);
+      }
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort("inference timeout"), INFERENCE_TIMEOUT_MS);
@@ -104,6 +143,10 @@ export function createHandler(services: Services = productionServices) {
         polishMs = Math.round(performance.now() - polishStartedAt);
         const usage = buildUsage(selectedModel, wav.durationSeconds, polishTokens);
         totalNeurons = usage?.totalNeurons ?? null;
+        if (reservation) {
+          await completeQuota(env, reservation, totalNeurons ?? reservation.reservedNeurons);
+          quotaCompleted = true;
+        }
         status = 200;
         return Response.json(
           {
@@ -137,10 +180,19 @@ export function createHandler(services: Services = productionServices) {
       status = safeError.status;
       return errorResponse(safeError, requestId);
     } finally {
+      if (reservation && !quotaCompleted) {
+        try {
+          await releaseQuota(env, reservation);
+        } catch {
+          // The scheduled cleanup releases any reservation left by an interrupted request.
+        }
+      }
       console.log(
         JSON.stringify({
-          event: "transcription_request",
+          event: "api_request",
           requestId,
+          route: url.pathname,
+          subjectId: principal?.userId ?? null,
           audioBytes,
           asrModel: selectedModel,
           timingsMs: {
@@ -154,6 +206,21 @@ export function createHandler(services: Services = productionServices) {
       );
     }
   };
+}
+
+function androidAssetLinks(env: AppEnv): unknown[] {
+  const staging = env.ENVIRONMENT === "staging";
+  const fingerprint = staging ? DEBUG_CERT_SHA256 : RELEASE_CERT_SHA256;
+  return [
+    {
+      relation: ["delegate_permission/common.handle_all_urls"],
+      target: {
+        namespace: "android_app",
+        package_name: staging ? "com.aliahad.wovoice.staging" : "com.aliahad.wovoice",
+        sha256_cert_fingerprints: [fingerprint],
+      },
+    },
+  ];
 }
 
 export interface UsageEstimate {
@@ -206,20 +273,22 @@ function round(value: number, places: number): number {
   return Math.round(value * factor) / factor;
 }
 
-async function authenticate(request: Request, expectedToken: string): Promise<string> {
+async function authenticatePrincipal(request: Request, env: AppEnv, url: URL): Promise<Principal> {
+  if (await acceptsLegacyToken(request, env, url)) {
+    return { userId: "legacy", sessionId: "legacy", legacy: true };
+  }
+  return authenticateAccess(request, env);
+}
+
+async function acceptsLegacyToken(request: Request, env: AppEnv, url: URL): Promise<boolean> {
+  if (url.hostname !== "wovoice-transcription.aliahad.workers.dev") return false;
+  const deadline = Date.parse(env.LEGACY_AUTH_DEADLINE);
+  if (!Number.isFinite(deadline) || Date.now() >= deadline || !env.CLIENT_TOKEN) return false;
   const authorization = request.headers.get("authorization") ?? "";
   const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   const [actualHash, expectedHash] = await Promise.all([
     crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)),
-    crypto.subtle.digest("SHA-256", new TextEncoder().encode(expectedToken)),
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(env.CLIENT_TOKEN)),
   ]);
-  if (!token || !expectedToken || !crypto.subtle.timingSafeEqual(actualHash, expectedHash)) {
-    throw new ApiError(401, "AUTHENTICATION_FAILED", false, "The device token is not accepted.");
-  }
-  return token;
-}
-
-async function digestHex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return Boolean(token && crypto.subtle.timingSafeEqual(actualHash, expectedHash));
 }

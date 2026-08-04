@@ -1,5 +1,14 @@
 export type ErrorCode =
   | "AUTHENTICATION_FAILED"
+  | "AUTH_REQUIRED"
+  | "TOKEN_EXPIRED"
+  | "INVALID_CODE"
+  | "EMAIL_RATE_LIMITED"
+  | "EMAIL_SEND_FAILED"
+  | "USER_QUOTA_EXCEEDED"
+  | "SERVICE_DAILY_LIMIT_REACHED"
+  | "SYNC_CONFLICT"
+  | "UPGRADE_REQUIRED"
   | "INVALID_REQUEST"
   | "INVALID_AUDIO"
   | "AUDIO_TOO_LONG"
@@ -15,6 +24,7 @@ export class ApiError extends Error {
     readonly code: ErrorCode,
     readonly retryable: boolean,
     message: string,
+    readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "ApiError";
@@ -22,6 +32,10 @@ export class ApiError extends Error {
 }
 
 export function errorResponse(error: ApiError, requestId: string): Response {
+  const headers = new Headers({ "Cache-Control": "no-store" });
+  if (error.retryAfterSeconds !== undefined) {
+    headers.set("Retry-After", error.retryAfterSeconds.toString());
+  }
   return Response.json(
     {
       requestId,
@@ -31,6 +45,6 @@ export function errorResponse(error: ApiError, requestId: string): Response {
         message: error.message,
       },
     },
-    { status: error.status },
+    { status: error.status, headers },
   );
 }
