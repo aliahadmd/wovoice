@@ -66,7 +66,7 @@
     "head_sampling_rate": 1
   },
   "secrets": {
-    "required": ["AUTH_MASTER_KEY", "PII_KEY", "TURNSTILE_SECRET", "CLIENT_TOKEN"]
+    "required": ["AUTH_MASTER_KEY", "PII_KEY", "TURNSTILE_SECRET"]
   },
   "env": {
     "staging": {
@@ -125,7 +125,7 @@
         "LEGACY_AUTH_DEADLINE": "2026-08-11T19:00:00.000Z"
       },
       "secrets": {
-        "required": ["AUTH_MASTER_KEY", "PII_KEY", "TURNSTILE_SECRET", "CLIENT_TOKEN"]
+        "required": ["AUTH_MASTER_KEY", "PII_KEY", "TURNSTILE_SECRET"]
       }
     }
   }

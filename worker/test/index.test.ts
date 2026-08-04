@@ -204,6 +204,28 @@ describe("passwordless accounts", () => {
     expect(attempts.map((response) => response.status).sort()).toEqual([200, 400]);
   });
 
+  it("returns a stable error at the exact monthly email ceiling", async () => {
+    const fixture = authFixture();
+    const monthKey = new Date().toISOString().slice(0, 7);
+    await fixture.environment.DB.prepare(
+      "INSERT OR REPLACE INTO service_monthly_usage(month_key, verification_emails) VALUES(?, 2500)",
+    ).bind(monthKey).run();
+    const response = await fixture.handler(jsonRequest("/v1/auth/start", {
+      email: "email-limit@example.com",
+      turnstileToken: "turnstile-test-token",
+      codeChallenge: await sha256("v".repeat(64)),
+      termsAccepted: true,
+    }), fixture.environment);
+    await fixture.environment.DB.prepare(
+      "UPDATE service_monthly_usage SET verification_emails = 0 WHERE month_key = ?",
+    ).bind(monthKey).run();
+    expect(response.status).toBe(503);
+    expect((await response.json()) as object).toMatchObject({
+      error: { code: "EMAIL_RATE_LIMITED", retryable: true },
+    });
+    expect(fixture.sent).toHaveLength(0);
+  });
+
   it("accounts successful inference against the verified user's daily quota", async () => {
     const fixture = authFixture();
     const signedIn = await registerAndSignIn("quota@example.com", fixture);
