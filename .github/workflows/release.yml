@@ -105,7 +105,7 @@ jobs:
             exit 1
           fi
           if gh release view v1.4.0 >/dev/null 2>&1; then
-            gh release delete v1.4.0 --yes --cleanup-tag
+            gh release delete v1.4.0 --yes
           fi
           gh release create "v$RELEASE_VERSION" \
             "release/WoVoice-$RELEASE_VERSION.apk" \
