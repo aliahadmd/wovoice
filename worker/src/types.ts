@@ -46,8 +46,6 @@ export type AppEnv = Omit<
   | "AUTH_MASTER_KEY"
   | "PII_KEY"
   | "TURNSTILE_SECRET"
-  | "ACCESS_TEAM_DOMAIN"
-  | "ACCESS_AUD"
   | "SUPPORT_EMAIL"
   | "ADMIN_BOOTSTRAP_EMAIL"
   | "CLIENT_TOKEN"
@@ -60,8 +58,6 @@ export type AppEnv = Omit<
   APP_ORIGIN: string;
   ENVIRONMENT: string;
   LEGACY_AUTH_DEADLINE: string;
-  ACCESS_TEAM_DOMAIN?: string;
-  ACCESS_AUD?: string;
   SUPPORT_EMAIL?: string;
   ADMIN_BOOTSTRAP_EMAIL?: string;
   CLIENT_TOKEN?: string;
@@ -73,6 +69,7 @@ export interface AuthServices {
     token: string,
     remoteIp: string | null,
     idempotencyKey: string,
+    expectedAction: "account_auth" | "admin_login",
   ): Promise<boolean>;
   sendCode(env: AppEnv, email: string, code: string): Promise<void>;
 }
@@ -87,12 +84,7 @@ export interface Principal {
   publicStatusMessage: string | null;
 }
 
-export interface AdminIdentity {
-  email: string;
-}
-
 export interface AdminServices {
-  verifyAccessJwt(env: AppEnv, token: string): Promise<AdminIdentity>;
   sendModerationEmail(
     env: AppEnv,
     message: {

@@ -26,6 +26,10 @@ export default {
       env.DB.prepare("DELETE FROM refresh_tokens WHERE expires_at < ?").bind(now - 86_400_000),
       env.DB.prepare("DELETE FROM sessions WHERE absolute_expires_at < ? OR revoked_at < ?")
         .bind(now - 86_400_000, now - 30 * 86_400_000),
+      env.DB.prepare("DELETE FROM admin_login_challenges WHERE expires_at < ?").bind(now - 86_400_000),
+      env.DB.prepare(
+        "DELETE FROM admin_browser_sessions WHERE absolute_expires_at < ? OR revoked_at < ?",
+      ).bind(now - 86_400_000, now - 30 * 86_400_000),
     ]);
   },
 } satisfies ExportedHandler<AppEnv>;

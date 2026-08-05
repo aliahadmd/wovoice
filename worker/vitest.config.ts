@@ -2,6 +2,9 @@ import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-worker
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  test: {
+    include: ["test/**/*.test.ts"],
+  },
   // Unit tests inject their own Env bindings. Keep the test runtime fully local
   // so CI never needs production Cloudflare credentials or a remote AI session.
   plugins: [

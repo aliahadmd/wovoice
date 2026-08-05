@@ -4,20 +4,31 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit",
+    "build": "npm run build:admin && npm run check",
+    "build:admin": "vite build --config admin-ui/vite.config.ts",
+    "check": "tsc --noEmit && tsc --noEmit -p admin-ui/tsconfig.json",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "test": "vitest run",
+    "test": "vitest run && vitest run --config admin-ui/vitest.config.ts",
     "types": "wrangler types"
   },
   "dependencies": {
-    "jose": "6.2.8"
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.20.1",
     "@types/node": "26.1.2",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.5",
+    "jsdom": "26.1.0",
     "typescript": "7.0.2",
+    "vite": "8.2.0",
     "vitest": "4.1.10",
     "wrangler": "4.118.0"
+  },
+  "overrides": {
+    "undici": "7.29.0"
   }
 }

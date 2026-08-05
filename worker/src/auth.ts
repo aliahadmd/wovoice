@@ -81,7 +81,7 @@ interface RefreshRow {
 }
 
 export const productionAuthServices: AuthServices = {
-  async verifyTurnstile(env, token, remoteIp, idempotencyKey): Promise<boolean> {
+  async verifyTurnstile(env, token, remoteIp, idempotencyKey, expectedAction): Promise<boolean> {
     const body = new URLSearchParams({
       secret: env.TURNSTILE_SECRET,
       response: token,
@@ -94,8 +94,16 @@ export const productionAuthServices: AuthServices = {
       body,
     });
     if (!response.ok) return false;
-    const result = (await response.json()) as { success?: boolean };
-    return result.success === true;
+    const result = (await response.json()) as { success?: boolean; hostname?: string; action?: string };
+    let expectedHostname = "";
+    try {
+      expectedHostname = new URL(env.APP_ORIGIN).hostname;
+    } catch {
+      return false;
+    }
+    return result.success === true
+      && result.hostname === expectedHostname
+      && result.action === expectedAction;
   },
   async sendCode(env, email, code): Promise<void> {
     await env.EMAIL.send({
@@ -179,6 +187,7 @@ async function startAuthentication(
     turnstileToken,
     request.headers.get("cf-connecting-ip"),
     requestId,
+    "account_auth",
   );
   if (!validTurnstile) {
     throw new ApiError(400, "INVALID_REQUEST", false, "The security check expired. Please try again.");

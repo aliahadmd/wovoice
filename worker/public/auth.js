@@ -102,6 +102,7 @@ async function boot() {
   widgetId = window.turnstile.render("#turnstile-widget", {
     sitekey: config.turnstileSiteKey,
     theme: "dark",
+    action: "account_auth",
     size: widgetContainer.clientWidth < 300 ? "compact" : "flexible",
     callback: (token) => {
       turnstileToken = token;

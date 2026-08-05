@@ -9,9 +9,7 @@ const valid = /^[A-Za-z0-9_-]{20,160}$/u.test(state)
 
 const openApp = document.querySelector("#open-app");
 if (valid) {
-  const packageName = location.hostname.startsWith("staging.")
-    ? "com.aliahad.wovoice.staging"
-    : "com.aliahad.wovoice";
+  const packageName = "com.aliahad.wovoice";
   openApp.href = `intent://${location.host}${location.pathname}${location.search}`
     + `#Intent;scheme=https;package=${packageName};end`;
 } else {

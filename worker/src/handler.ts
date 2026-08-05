@@ -20,8 +20,10 @@ const POLISH_INPUT_NEURONS_PER_MILLION = 18_182;
 const POLISH_OUTPUT_NEURONS_PER_MILLION = 27_273;
 const POLISH_INPUT_USD_PER_MILLION = 0.2;
 const POLISH_OUTPUT_USD_PER_MILLION = 0.3;
-const RELEASE_CERT_SHA256 =
+const LEGACY_RELEASE_CERT_SHA256 =
   "3A:E4:93:35:28:83:E2:7F:98:ED:93:60:A4:C2:95:6B:66:2C:24:1C:74:FC:2B:B8:5C:5A:C1:6F:3F:2F:D1:D4";
+const RELEASE_V2_CERT_SHA256 =
+  "61:E2:D4:78:A0:75:E3:FD:B8:C8:21:3C:71:B7:C6:57:E7:7D:B4:9E:72:24:49:6C:56:6F:15:15:40:05:D9:79";
 const DEBUG_CERT_SHA256 =
   "EC:F2:BE:43:B8:6F:94:29:CF:7F:21:2D:90:F6:7D:AC:04:A7:31:20:7A:BA:58:11:C4:82:B3:13:36:11:67:19";
 
@@ -82,7 +84,7 @@ export function createHandler(
     let outcomeCode: string | null = null;
 
     try {
-      const adminResponse = await handleAdminRoute(request, env, requestId, adminServices, ctx);
+      const adminResponse = await handleAdminRoute(request, env, requestId, adminServices, authServices, ctx);
       if (adminResponse) {
         status = adminResponse.status;
         return adminResponse;
@@ -263,20 +265,15 @@ export function createHandler(
 }
 
 function androidAssetLinks(env: AppEnv): unknown[] {
-  const staging = env.ENVIRONMENT === "staging";
-  // The production package has two legitimate installed signing identities:
-  // the release signer used for public APKs and the legacy signer used by the
-  // original private installation. Android supports listing both fingerprints.
-  const fingerprints = staging
-    ? [DEBUG_CERT_SHA256]
-    : [RELEASE_CERT_SHA256, DEBUG_CERT_SHA256];
   return [
     {
       relation: ["delegate_permission/common.handle_all_urls"],
       target: {
         namespace: "android_app",
-        package_name: staging ? "com.aliahad.wovoice.staging" : "com.aliahad.wovoice",
-        sha256_cert_fingerprints: fingerprints,
+        package_name: "com.aliahad.wovoice",
+        // Preserve App Links for v1.3 and the original private debug-signed
+        // installation while v1.5 moves public releases to the v2 signer.
+        sha256_cert_fingerprints: [RELEASE_V2_CERT_SHA256, LEGACY_RELEASE_CERT_SHA256, DEBUG_CERT_SHA256],
       },
     },
   ];

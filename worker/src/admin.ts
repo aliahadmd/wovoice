@@ -1,6 +1,5 @@
-import { createRemoteJWKSet, jwtVerify } from "jose";
 import { ApiError } from "./errors";
-import { base64Url, decryptString, fromBase64Url, hmac } from "./crypto";
+import { base64Url, decryptString, fromBase64Url, hmac, randomCode, randomToken, timingSafeEqual } from "./crypto";
 import { noStoreJson, readJson } from "./http";
 import {
   accountStatusValue,
@@ -9,11 +8,33 @@ import {
   recordActivity,
   type AccountControlRow,
 } from "./moderation";
-import type { AccountRole, AccountState, AdminIdentity, AdminServices, AppEnv } from "./types";
+import type { AccountRole, AccountState, AdminServices, AppEnv, AuthServices } from "./types";
 
 const MAX_SUSPENSION_MS = 180 * 86_400_000;
 const MAX_QUOTA_OVERRIDE_MS = 30 * 86_400_000;
 const MAX_PAGE_SIZE = 100;
+const ADMIN_CODE_LIFETIME_MS = 10 * 60_000;
+const ADMIN_CODE_RESEND_MS = 60_000;
+const ADMIN_IDLE_LIFETIME_MS = 30 * 60_000;
+const ADMIN_ABSOLUTE_LIFETIME_MS = 8 * 60 * 60_000;
+const ADMIN_SESSION_COOKIE = "__Host-wovoice-admin";
+const ADMIN_CSRF_COOKIE = "__Host-wovoice-admin-csrf";
+const ADMIN_SHELL = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#111014">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <title>WoVoice Admin</title>
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/admin/assets/admin.js"></script>
+</body>
+</html>`;
 const ADMIN_ASSET_HEADERS: Record<string, string> = {
   "Cache-Control": "no-store",
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'",
@@ -25,13 +46,31 @@ const ADMIN_ASSET_HEADERS: Record<string, string> = {
   "X-Frame-Options": "DENY",
 };
 
-type Jwks = ReturnType<typeof createRemoteJWKSet>;
-const jwksByTeam = new Map<string, Jwks>();
+const LOGIN_ASSET_HEADERS: Record<string, string> = {
+  ...ADMIN_ASSET_HEADERS,
+  "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self' https://challenges.cloudflare.com; font-src 'self'; form-action 'self'; frame-ancestors 'none'; frame-src https://challenges.cloudflare.com; img-src 'self' data:; object-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'",
+};
 
 interface AdminPrincipal {
   userId: string;
+  sessionId: string;
   email: string;
   role: "admin";
+  csrfHash: string;
+  absoluteExpiresAt: number;
+}
+
+interface AdminSessionRow {
+  session_id: string;
+  user_id: string;
+  csrf_hash: string;
+  idle_expires_at: number;
+  absolute_expires_at: number;
+  revoked_at: number | null;
+  role: AccountRole;
+  status: AccountState;
+  email_ciphertext: string;
+  email_nonce: string;
 }
 
 interface AdminUserRow extends AccountControlRow {
@@ -49,27 +88,6 @@ interface AdminUserRow extends AccountControlRow {
 }
 
 export const productionAdminServices: AdminServices = {
-  async verifyAccessJwt(env, token): Promise<AdminIdentity> {
-    const teamDomain = normalizedTeamDomain(env.ACCESS_TEAM_DOMAIN);
-    const audience = env.ACCESS_AUD?.trim();
-    if (!teamDomain || !audience) {
-      console.error(JSON.stringify({ event: "admin_access_unconfigured" }));
-      throw new ApiError(503, "ADMIN_REQUIRED", true, "The WoVoice admin console is not configured.");
-    }
-    let jwks = jwksByTeam.get(teamDomain);
-    if (!jwks) {
-      jwks = createRemoteJWKSet(new URL(`${teamDomain}/cdn-cgi/access/certs`));
-      jwksByTeam.set(teamDomain, jwks);
-    }
-    try {
-      const result = await jwtVerify(token, jwks, { issuer: teamDomain, audience });
-      const email = typeof result.payload.email === "string" ? normalizeEmail(result.payload.email) : "";
-      if (!email) throw new Error("Access identity has no email claim");
-      return { email };
-    } catch {
-      throw new ApiError(403, "ADMIN_REQUIRED", false, "Administrator access is required.");
-    }
-  },
   async sendModerationEmail(env, message): Promise<void> {
     const supportEmail = env.SUPPORT_EMAIL?.trim() || "support@aliahad.com";
     const stateLabel = message.state === "active" ? "restored" : message.state;
@@ -97,24 +115,78 @@ export async function handleAdminRoute(
   env: AppEnv,
   requestId: string,
   services: AdminServices = productionAdminServices,
+  authServices?: AuthServices,
   ctx?: ExecutionContext,
 ): Promise<Response | null> {
   const url = new URL(request.url);
-  if (url.pathname !== "/admin" && !url.pathname.startsWith("/admin/")) return null;
+  const adminPath = url.pathname === "/admin" || url.pathname.startsWith("/admin/");
+  const loginPath = url.pathname === "/login" || url.pathname === "/login/";
+  if (!adminPath && !loginPath) return null;
 
-  const admin = await authenticateAdmin(request, env, services);
-  if (!url.pathname.startsWith("/admin/api/v1")) {
+  if (loginPath) {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      throw new ApiError(405, "INVALID_REQUEST", false, "This login resource is read-only.");
+    }
+    const existing = await optionalAdmin(request, env);
+    if (existing) return redirectResponse(safeAdminReturn(url.searchParams.get("returnTo")));
+    return adminAsset(request, env, true);
+  }
+
+  if (url.pathname.startsWith("/admin/assets/")) {
     if (request.method !== "GET" && request.method !== "HEAD") {
       throw new ApiError(405, "INVALID_REQUEST", false, "This admin resource is read-only.");
     }
-    return adminAsset(request, env);
+    return adminAsset(request, env, false);
   }
 
-  if (!["GET", "HEAD"].includes(request.method)) requireSameOrigin(request, env);
-  const apiPath = url.pathname.slice("/admin/api/v1".length) || "/";
+  const apiPath = url.pathname.startsWith("/admin/api/v1")
+    ? url.pathname.slice("/admin/api/v1".length) || "/"
+    : null;
+  if (apiPath === "/auth/config" && request.method === "GET") {
+    return noStoreJson({
+      requestId,
+      turnstileSiteKey: env.TURNSTILE_SITE_KEY,
+      idleExpiresIn: ADMIN_IDLE_LIFETIME_MS / 1_000,
+      absoluteExpiresIn: ADMIN_ABSOLUTE_LIFETIME_MS / 1_000,
+    });
+  }
+  if (apiPath === "/auth/start" && request.method === "POST") {
+    if (!authServices) throw new ApiError(503, "ADMIN_REQUIRED", true, "Administrator sign-in is unavailable.");
+    return startAdminAuthentication(request, env, requestId, authServices);
+  }
+  if (apiPath === "/auth/verify" && request.method === "POST") {
+    return verifyAdminCode(request, env, requestId);
+  }
+
+  let admin: AdminPrincipal;
+  try {
+    admin = await authenticateAdmin(request, env);
+  } catch (error) {
+    if (apiPath === null && request.method === "GET" && error instanceof ApiError && error.status === 401) {
+      const returnTo = `${url.pathname}${url.search}`;
+      return redirectResponse(`/login?returnTo=${encodeURIComponent(returnTo)}`);
+    }
+    throw error;
+  }
+  if (apiPath === null) {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      throw new ApiError(405, "INVALID_REQUEST", false, "This admin resource is read-only.");
+    }
+    return adminAsset(request, env, false);
+  }
+
+  if (apiPath === "/logout" && request.method === "POST") {
+    await requireAdminMutation(request, env, admin);
+    return logoutAdmin(env, requestId, admin);
+  }
+  if (!["GET", "HEAD"].includes(request.method)) await requireAdminMutation(request, env, admin);
 
   if (request.method === "GET" && apiPath === "/session") {
-    return noStoreJson({ requestId, admin: { id: admin.userId, email: admin.email, role: admin.role } });
+    return noStoreJson({
+      requestId,
+      admin: { id: admin.userId, email: admin.email, role: admin.role },
+      session: { absoluteExpiresAt: admin.absoluteExpiresAt },
+    });
   }
   if (request.method === "GET" && apiPath === "/overview") {
     return overview(env, requestId, url.searchParams.get("period") ?? "7d");
@@ -157,33 +229,287 @@ export async function handleAdminRoute(
   throw new ApiError(404, "NOT_FOUND", false, "This admin endpoint does not exist.");
 }
 
-async function authenticateAdmin(request: Request, env: AppEnv, services: AdminServices): Promise<AdminPrincipal> {
-  const assertion = request.headers.get("cf-access-jwt-assertion")?.trim() ?? "";
-  if (!assertion) throw new ApiError(403, "ADMIN_REQUIRED", false, "Administrator access is required.");
-  const identity = await services.verifyAccessJwt(env, assertion);
-  const lookup = await hmac(env.AUTH_MASTER_KEY, `email:${normalizeEmail(identity.email)}`);
-  const user = await env.DB.prepare(
-    "SELECT id, role, status FROM users WHERE email_lookup = ?",
-  ).bind(lookup).first<{ id: string; role: AccountRole; status: AccountState }>();
-  if (!user || user.role !== "admin" || user.status !== "active") {
+async function authenticateAdmin(request: Request, env: AppEnv): Promise<AdminPrincipal> {
+  const token = cookieValue(request, ADMIN_SESSION_COOKIE);
+  if (!token) throw new ApiError(401, "ADMIN_REQUIRED", false, "Sign in as the WoVoice administrator.");
+  const tokenHash = await hmac(env.AUTH_MASTER_KEY, `admin-session:${token}`);
+  const row = await env.DB.prepare(
+    `SELECT s.id AS session_id, s.user_id, s.csrf_hash, s.idle_expires_at, s.absolute_expires_at,
+            s.revoked_at, u.role, u.status, u.email_ciphertext, u.email_nonce
+     FROM admin_browser_sessions s JOIN users u ON u.id = s.user_id
+     WHERE s.token_hash = ?`,
+  ).bind(tokenHash).first<AdminSessionRow>();
+  const now = Date.now();
+  if (!row || row.revoked_at !== null || row.idle_expires_at <= now || row.absolute_expires_at <= now) {
+    if (row && row.revoked_at === null) {
+      await env.DB.prepare("UPDATE admin_browser_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+        .bind(now, row.session_id).run();
+    }
+    throw new ApiError(401, "ADMIN_REQUIRED", false, "Your administrator session expired. Sign in again.");
+  }
+  if (row.role !== "admin" || row.status !== "active") {
+    await env.DB.prepare("UPDATE admin_browser_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+      .bind(now, row.session_id).run();
     throw new ApiError(403, "ADMIN_REQUIRED", false, "Administrator access is required.");
   }
-  return { userId: user.id, email: normalizeEmail(identity.email), role: "admin" };
+  const idleExpiresAt = Math.min(row.absolute_expires_at, now + ADMIN_IDLE_LIFETIME_MS);
+  await env.DB.prepare(
+    "UPDATE admin_browser_sessions SET last_seen_at = ?, idle_expires_at = ? WHERE id = ? AND revoked_at IS NULL",
+  ).bind(now, idleExpiresAt, row.session_id).run();
+  const email = await decryptString(env.PII_KEY, row.email_ciphertext, row.email_nonce);
+  return {
+    userId: row.user_id,
+    sessionId: row.session_id,
+    email,
+    role: "admin",
+    csrfHash: row.csrf_hash,
+    absoluteExpiresAt: row.absolute_expires_at,
+  };
 }
 
-async function adminAsset(request: Request, env: AppEnv): Promise<Response> {
+async function optionalAdmin(request: Request, env: AppEnv): Promise<AdminPrincipal | null> {
+  try {
+    return await authenticateAdmin(request, env);
+  } catch (error) {
+    if (error instanceof ApiError && (error.status === 401 || error.status === 403)) return null;
+    throw error;
+  }
+}
+
+async function adminAsset(request: Request, env: AppEnv, login: boolean): Promise<Response> {
   const url = new URL(request.url);
-  if (url.pathname === "/admin") url.pathname = "/admin/";
-  if (url.pathname === "/admin/") url.pathname = "/admin/index.html";
+  if (login || !url.pathname.startsWith("/admin/assets/")) {
+    const headers = new Headers(login ? LOGIN_ASSET_HEADERS : ADMIN_ASSET_HEADERS);
+    headers.set("Content-Type", "text/html; charset=utf-8");
+    return new Response(request.method === "HEAD" ? null : ADMIN_SHELL, { headers });
+  }
   const assetRequest = new Request(url, request);
   const asset = await env.ASSETS.fetch(assetRequest);
   const headers = new Headers(asset.headers);
-  for (const [name, value] of Object.entries(ADMIN_ASSET_HEADERS)) headers.set(name, value);
+  const securityHeaders = login ? LOGIN_ASSET_HEADERS : ADMIN_ASSET_HEADERS;
+  for (const [name, value] of Object.entries(securityHeaders)) headers.set(name, value);
   return new Response(request.method === "HEAD" ? null : asset.body, {
     status: asset.status,
     statusText: asset.statusText,
     headers,
   });
+}
+
+async function startAdminAuthentication(
+  request: Request,
+  env: AppEnv,
+  requestId: string,
+  authServices: AuthServices,
+): Promise<Response> {
+  requireBrowserRequest(request, env);
+  const body = await readJson<{ email?: unknown; turnstileToken?: unknown }>(request);
+  const email = typeof body.email === "string" ? normalizeEmail(body.email) : "";
+  if (!email) throw new ApiError(400, "INVALID_REQUEST", false, "Enter a valid email address.");
+  const turnstileToken = typeof body.turnstileToken === "string" ? body.turnstileToken : "";
+  if (!turnstileToken || turnstileToken.length > 2_048) {
+    throw new ApiError(400, "INVALID_REQUEST", false, "Complete the security check and try again.");
+  }
+  const emailLookup = await hmac(env.AUTH_MASTER_KEY, `email:${email}`);
+  const burst = await env.AUTH_RATE_LIMITER.limit({ key: `admin:${emailLookup}` });
+  if (!burst.success) {
+    throw new ApiError(429, "EMAIL_RATE_LIMITED", true, "Please wait before requesting another code.", 60);
+  }
+  const validTurnstile = await authServices.verifyTurnstile(
+    env,
+    turnstileToken,
+    request.headers.get("cf-connecting-ip"),
+    requestId,
+    "admin_login",
+  );
+  if (!validTurnstile) {
+    throw new ApiError(400, "INVALID_REQUEST", false, "The security check expired. Please try again.");
+  }
+  const now = Date.now();
+  const recent = await env.DB.prepare(
+    "SELECT resend_after FROM admin_login_challenges WHERE email_lookup = ? ORDER BY created_at DESC LIMIT 1",
+  ).bind(emailLookup).first<{ resend_after: number }>();
+  if (recent && recent.resend_after > now) {
+    throw new ApiError(
+      429,
+      "EMAIL_RATE_LIMITED",
+      true,
+      "Please wait before requesting another code.",
+      Math.max(1, Math.ceil((recent.resend_after - now) / 1_000)),
+    );
+  }
+
+  const user = await env.DB.prepare(
+    "SELECT id, role, status FROM users WHERE email_lookup = ?",
+  ).bind(emailLookup).first<{ id: string; role: AccountRole; status: AccountState }>();
+  const eligibleUserId = user?.role === "admin" && user.status === "active" ? user.id : null;
+  const challengeId = crypto.randomUUID();
+  const code = randomCode();
+  const codeHash = await hmac(env.AUTH_MASTER_KEY, `admin-otp:${challengeId}:${code}`);
+  await env.DB.prepare(
+    `INSERT INTO admin_login_challenges
+      (id, email_lookup, user_id, code_hash, attempts, created_at, expires_at, resend_after)
+     VALUES(?, ?, ?, ?, 0, ?, ?, ?)`,
+  ).bind(
+    challengeId,
+    emailLookup,
+    eligibleUserId,
+    codeHash,
+    now,
+    now + ADMIN_CODE_LIFETIME_MS,
+    now + ADMIN_CODE_RESEND_MS,
+  ).run();
+
+  if (eligibleUserId) {
+    const monthKey = new Date(now).toISOString().slice(0, 7);
+    try {
+      const results = await env.DB.batch([
+        env.DB.prepare(
+          "INSERT OR IGNORE INTO service_monthly_usage(month_key, verification_emails) VALUES(?, 0)",
+        ).bind(monthKey),
+        env.DB.prepare(
+          "UPDATE service_monthly_usage SET verification_emails = verification_emails + 1 WHERE month_key = ?",
+        ).bind(monthKey),
+      ]);
+      if ((results[1]?.meta.changes ?? 0) !== 1) throw new Error("EMAIL_RATE_LIMITED");
+      await authServices.sendCode(env, email, code);
+    } catch (error) {
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM admin_login_challenges WHERE id = ?").bind(challengeId),
+        env.DB.prepare(
+          "UPDATE service_monthly_usage SET verification_emails = MAX(0, verification_emails - 1) WHERE month_key = ?",
+        ).bind(monthKey),
+      ]);
+      console.error(JSON.stringify({
+        event: "admin_verification_email_failed",
+        requestId,
+        reason: safeInfrastructureError(error),
+      }));
+      throw new ApiError(503, "EMAIL_SEND_FAILED", true, "The verification email could not be sent. Please try again.");
+    }
+  }
+
+  return noStoreJson({ requestId, challengeId, expiresIn: 600, resendAfter: 60 });
+}
+
+async function verifyAdminCode(request: Request, env: AppEnv, requestId: string): Promise<Response> {
+  requireBrowserRequest(request, env);
+  const body = await readJson<{ challengeId?: unknown; code?: unknown }>(request);
+  const challengeId = typeof body.challengeId === "string" ? body.challengeId : "";
+  const code = typeof body.code === "string" ? body.code.trim() : "";
+  if (!challengeId || !/^\d{6}$/u.test(code)) invalidAdminCode();
+  const challenge = await env.DB.prepare(
+    `SELECT id, user_id, code_hash, attempts, expires_at, consumed_at
+     FROM admin_login_challenges WHERE id = ?`,
+  ).bind(challengeId).first<{
+    id: string;
+    user_id: string | null;
+    code_hash: string;
+    attempts: number;
+    expires_at: number;
+    consumed_at: number | null;
+  }>();
+  const now = Date.now();
+  if (!challenge || challenge.consumed_at !== null || challenge.expires_at <= now || challenge.attempts >= 5) {
+    invalidAdminCode();
+  }
+  const candidateHash = await hmac(env.AUTH_MASTER_KEY, `admin-otp:${challenge.id}:${code}`);
+  if (!timingSafeEqual(candidateHash, challenge.code_hash) || !challenge.user_id) {
+    await env.DB.prepare(
+      "UPDATE admin_login_challenges SET attempts = attempts + 1 WHERE id = ? AND consumed_at IS NULL",
+    ).bind(challenge.id).run();
+    invalidAdminCode();
+  }
+  const user = await env.DB.prepare(
+    "SELECT id, role, status, email_ciphertext, email_nonce FROM users WHERE id = ?",
+  ).bind(challenge.user_id).first<{
+    id: string;
+    role: AccountRole;
+    status: AccountState;
+    email_ciphertext: string;
+    email_nonce: string;
+  }>();
+  if (!user || user.role !== "admin" || user.status !== "active") invalidAdminCode();
+
+  const sessionId = crypto.randomUUID();
+  const sessionToken = randomToken();
+  const csrfToken = randomToken();
+  const [tokenHash, csrfHash] = await Promise.all([
+    hmac(env.AUTH_MASTER_KEY, `admin-session:${sessionToken}`),
+    hmac(env.AUTH_MASTER_KEY, `admin-csrf:${csrfToken}`),
+  ]);
+  const absoluteExpiresAt = now + ADMIN_ABSOLUTE_LIFETIME_MS;
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE admin_login_challenges SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL",
+      ).bind(now, challenge.id),
+      env.DB.prepare(
+        `INSERT INTO admin_browser_sessions
+          (id, challenge_id, user_id, token_hash, csrf_hash, created_at, last_seen_at,
+           idle_expires_at, absolute_expires_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        sessionId,
+        challenge.id,
+        user.id,
+        tokenHash,
+        csrfHash,
+        now,
+        now,
+        now + ADMIN_IDLE_LIFETIME_MS,
+        absoluteExpiresAt,
+      ),
+      env.DB.prepare(
+        `INSERT INTO admin_audit_events
+          (id, actor_user_id, target_user_id, action, internal_reason, before_state, after_state,
+           request_id, created_at)
+         VALUES(?, ?, NULL, 'admin_login', 'First-party email verification', NULL, ?, ?, ?)`,
+      ).bind(
+        crypto.randomUUID(),
+        user.id,
+        JSON.stringify({ sessionId, absoluteExpiresAt }),
+        requestId,
+        now,
+      ),
+    ]);
+  } catch {
+    invalidAdminCode();
+  }
+  const email = await decryptString(env.PII_KEY, user.email_ciphertext, user.email_nonce);
+  const response = noStoreJson({
+    requestId,
+    admin: { id: user.id, email, role: "admin" },
+    session: { absoluteExpiresAt },
+  });
+  response.headers.append("Set-Cookie", sessionCookie(ADMIN_SESSION_COOKIE, sessionToken, ADMIN_ABSOLUTE_LIFETIME_MS));
+  response.headers.append("Set-Cookie", sessionCookie(ADMIN_CSRF_COOKIE, csrfToken, ADMIN_ABSOLUTE_LIFETIME_MS, false));
+  return response;
+}
+
+async function logoutAdmin(env: AppEnv, requestId: string, admin: AdminPrincipal): Promise<Response> {
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE admin_browser_sessions SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL",
+    ).bind(now, admin.sessionId, admin.userId),
+    env.DB.prepare(
+      `INSERT INTO admin_audit_events
+        (id, actor_user_id, target_user_id, action, internal_reason, before_state, after_state,
+         request_id, created_at)
+       VALUES(?, ?, NULL, 'admin_logout', 'Administrator signed out', ?, ?, ?, ?)`,
+    ).bind(
+      crypto.randomUUID(),
+      admin.userId,
+      JSON.stringify({ sessionId: admin.sessionId }),
+      JSON.stringify({ revokedAt: now }),
+      requestId,
+      now,
+    ),
+  ]);
+  const response = new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
+  response.headers.append("Set-Cookie", clearCookie(ADMIN_SESSION_COOKIE, true));
+  response.headers.append("Set-Cookie", clearCookie(ADMIN_CSRF_COOKIE, false));
+  return response;
 }
 
 async function overview(env: AppEnv, requestId: string, period: string): Promise<Response> {
@@ -709,9 +1035,22 @@ async function medianLatency(env: AppEnv, startMs: number): Promise<number | nul
   return Math.round(values.results.reduce((sum, value) => sum + value.latency_ms, 0) / values.results.length);
 }
 
-function requireSameOrigin(request: Request, env: AppEnv): void {
-  if (request.headers.get("origin") !== env.APP_ORIGIN) {
+function requireBrowserRequest(request: Request, env: AppEnv): void {
+  if (request.headers.get("origin") !== env.APP_ORIGIN || request.headers.get("sec-fetch-site") !== "same-origin") {
     throw new ApiError(403, "ADMIN_REQUIRED", false, "The admin request origin is invalid.");
+  }
+}
+
+async function requireAdminMutation(request: Request, env: AppEnv, admin: AdminPrincipal): Promise<void> {
+  requireBrowserRequest(request, env);
+  const headerToken = request.headers.get("x-wovoice-csrf")?.trim() ?? "";
+  const cookieToken = cookieValue(request, ADMIN_CSRF_COOKIE);
+  if (!headerToken || !cookieToken || !timingSafeEqual(headerToken, cookieToken)) {
+    throw new ApiError(403, "ADMIN_REQUIRED", false, "The admin security token is invalid.");
+  }
+  const candidateHash = await hmac(env.AUTH_MASTER_KEY, `admin-csrf:${headerToken}`);
+  if (!timingSafeEqual(candidateHash, admin.csrfHash)) {
+    throw new ApiError(403, "ADMIN_REQUIRED", false, "The admin security token is invalid.");
   }
 }
 
@@ -778,17 +1117,6 @@ function normalizeEmail(value: string): string {
   return email;
 }
 
-function normalizedTeamDomain(value: string | undefined): string {
-  const raw = value?.trim().replace(/\/+$/u, "") ?? "";
-  if (!raw) return "";
-  try {
-    const url = new URL(raw);
-    return url.protocol === "https:" && url.pathname === "/" ? url.origin : "";
-  } catch {
-    return "";
-  }
-}
-
 function parseStoredJson(value: string | null): unknown {
   if (!value) return null;
   try {
@@ -796,6 +1124,77 @@ function parseStoredJson(value: string | null): unknown {
   } catch {
     return null;
   }
+}
+
+function cookieValue(request: Request, name: string): string {
+  const cookie = request.headers.get("cookie") ?? "";
+  for (const part of cookie.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0) continue;
+    if (part.slice(0, separator).trim() !== name) continue;
+    const value = part.slice(separator + 1).trim();
+    return /^[A-Za-z0-9_-]{20,200}$/u.test(value) ? value : "";
+  }
+  return "";
+}
+
+function sessionCookie(name: string, value: string, lifetimeMs: number, httpOnly = true): string {
+  return [
+    `${name}=${value}`,
+    "Path=/",
+    `Max-Age=${Math.floor(lifetimeMs / 1_000)}`,
+    "Secure",
+    httpOnly ? "HttpOnly" : "",
+    "SameSite=Strict",
+  ].filter(Boolean).join("; ");
+}
+
+function clearCookie(name: string, httpOnly: boolean): string {
+  return [
+    `${name}=`,
+    "Path=/",
+    "Max-Age=0",
+    "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+    "Secure",
+    httpOnly ? "HttpOnly" : "",
+    "SameSite=Strict",
+  ].filter(Boolean).join("; ");
+}
+
+function safeAdminReturn(value: string | null): string {
+  if (!value || (!value.startsWith("/admin") || value.startsWith("//"))) return "/admin/";
+  try {
+    const parsed = new URL(value, "https://wovoice.invalid");
+    return parsed.origin === "https://wovoice.invalid" && parsed.pathname.startsWith("/admin")
+      ? `${parsed.pathname}${parsed.search}${parsed.hash}`
+      : "/admin/";
+  } catch {
+    return "/admin/";
+  }
+}
+
+function redirectResponse(location: string): Response {
+  return new Response(null, {
+    status: 303,
+    headers: {
+      "Cache-Control": "no-store",
+      Location: location,
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
+
+function invalidAdminCode(): never {
+  throw new ApiError(400, "INVALID_CODE", false, "The code is invalid or expired.");
+}
+
+function safeInfrastructureError(error: unknown): string {
+  const source = error instanceof Error ? `${error.name}: ${error.message}` : typeof error;
+  return source
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu, "[redacted-email]")
+    .replace(/[A-Za-z0-9_-]{30,}/gu, "[redacted-value]")
+    .slice(0, 240);
 }
 
 async function defer(ctx: ExecutionContext | undefined, promise: Promise<unknown>): Promise<void> {

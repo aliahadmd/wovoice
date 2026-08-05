@@ -17,7 +17,7 @@
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
-    "run_worker_first": ["/v1/*", "/.well-known/*", "/app/callback*", "/admin*"]
+    "run_worker_first": ["/v1/*", "/.well-known/*", "/app/callback*", "/login*", "/admin*"]
   },
   "d1_databases": [
     {
@@ -56,8 +56,6 @@
     "APP_ORIGIN": "https://wovoice.aliahad.com",
     "ENVIRONMENT": "production",
     "SUPPORT_EMAIL": "support@aliahad.com",
-    "ACCESS_TEAM_DOMAIN": "https://aliahad.cloudflareaccess.com",
-    "ACCESS_AUD": "1833695a70385a3596ef01e20da48ff12a64a6cffdd741e36de64b5395ebe522",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAEGXORiDrI06ZVTr",
     "LEGACY_AUTH_DEADLINE": "2026-08-11T19:00:00.000Z"
   },
@@ -70,69 +68,5 @@
   },
   "secrets": {
     "required": ["AUTH_MASTER_KEY", "PII_KEY", "TURNSTILE_SECRET"]
-  },
-  "env": {
-    "staging": {
-      "name": "wovoice-transcription-staging",
-      "routes": [
-        {
-          "pattern": "staging.wovoice.aliahad.com",
-          "custom_domain": true
-        }
-      ],
-      "ai": {
-        "binding": "AI"
-      },
-      "assets": {
-        "directory": "./public",
-        "binding": "ASSETS",
-        "run_worker_first": ["/v1/*", "/.well-known/*", "/app/callback*", "/admin*"]
-      },
-      "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "wovoice-accounts-staging",
-          "database_id": "17165dca-7d55-43e4-9187-2e46cfce0f27",
-          "migrations_dir": "./migrations"
-        }
-      ],
-      "send_email": [
-        {
-          "name": "EMAIL",
-          "allowed_sender_addresses": ["login@wovoice.aliahad.com"]
-        }
-      ],
-      "ratelimits": [
-        {
-          "name": "RATE_LIMITER",
-          "namespace_id": "2026080502",
-          "simple": {
-            "limit": 10,
-            "period": 60
-          }
-        },
-        {
-          "name": "AUTH_RATE_LIMITER",
-          "namespace_id": "2026080504",
-          "simple": {
-            "limit": 5,
-            "period": 60
-          }
-        }
-      ],
-      "vars": {
-        "ASR_MODEL": "whisper",
-        "APP_ORIGIN": "https://staging.wovoice.aliahad.com",
-        "ENVIRONMENT": "staging",
-        "SUPPORT_EMAIL": "support@aliahad.com",
-        "ACCESS_TEAM_DOMAIN": "https://aliahad.cloudflareaccess.com",
-        "ACCESS_AUD": "215462fb9b5d3d22cca3a080aae72e249a8304e5c45f9d0e8756cedced23134a",
-        "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
-        "LEGACY_AUTH_DEADLINE": "2026-08-11T19:00:00.000Z"
-      },
-      "secrets": {
-        "required": ["AUTH_MASTER_KEY", "PII_KEY", "TURNSTILE_SECRET"]
-      }
-    }
   }
 }

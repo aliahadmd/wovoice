@@ -3,9 +3,9 @@ import { join } from "node:path";
 
 const audioDirectory = process.argv[2];
 const baseUrl = process.env.WOVOICE_WORKER_URL?.replace(/\/$/, "");
-const token = process.env.WOVOICE_DEVICE_TOKEN;
+const token = process.env.WOVOICE_ACCESS_TOKEN;
 if (!audioDirectory || !baseUrl?.startsWith("https://") || !token) {
-  throw new Error("Set WOVOICE_WORKER_URL and WOVOICE_DEVICE_TOKEN, then pass the WAV directory.");
+  throw new Error("Set WOVOICE_WORKER_URL and WOVOICE_ACCESS_TOKEN, then pass the WAV directory.");
 }
 
 const cases = JSON.parse(await readFile(new URL("./utterances.json", import.meta.url), "utf8"));

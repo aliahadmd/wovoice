@@ -24,6 +24,8 @@ beforeEach(async () => {
   // The Workers test database is shared for the file. Remove expired-style
   // challenge state so repeated admin-account verification remains isolated.
   await env.DB.prepare("DELETE FROM login_challenges").run();
+  await env.DB.prepare("DELETE FROM admin_browser_sessions").run();
+  await env.DB.prepare("DELETE FROM admin_login_challenges").run();
 });
 
 describe("WoVoice Worker", () => {
@@ -40,19 +42,7 @@ describe("WoVoice Worker", () => {
     });
   });
 
-  it("serves environment-specific Android App Link certificates", async () => {
-    const staging = fakeEnv();
-    staging.ENVIRONMENT = "staging";
-    const stagingResponse = await createHandler(fakeServices())(
-      new Request("https://staging.wovoice.aliahad.com/.well-known/assetlinks.json"),
-      staging,
-    );
-    const stagingBody = JSON.stringify(await stagingResponse.json());
-    expect(stagingResponse.headers.get("cache-control")).toBe("no-store");
-    expect(stagingBody).toContain("com.aliahad.wovoice.staging");
-    expect(stagingBody).toContain("EC:F2:BE:43:B8:6F:94:29");
-    expect(stagingBody).not.toContain("3A:E4:93:35:28:83:E2:7F");
-
+  it("serves the current, legacy, and local-development App Link certificates", async () => {
     const production = fakeEnv();
     production.ENVIRONMENT = "production";
     const productionResponse = await createHandler(fakeServices())(
@@ -60,8 +50,9 @@ describe("WoVoice Worker", () => {
       production,
     );
     const productionBody = JSON.stringify(await productionResponse.json());
+    expect(productionResponse.headers.get("cache-control")).toBe("no-store");
     expect(productionBody).toContain('"package_name":"com.aliahad.wovoice"');
-    expect(productionBody).not.toContain("com.aliahad.wovoice.staging");
+    expect(productionBody).toContain("61:E2:D4:78:A0:75:E3:FD");
     expect(productionBody).toContain("3A:E4:93:35:28:83:E2:7F");
     expect(productionBody).toContain("EC:F2:BE:43:B8:6F:94:29");
   });
@@ -310,35 +301,48 @@ describe("passwordless accounts", () => {
 });
 
 describe("admin moderation", () => {
-  it("protects admin assets even when an external Access policy is absent", async () => {
+  it("redirects protected admin pages to the first-party login", async () => {
     const fixture = adminFixture();
     const response = await fixture.handler(
       new Request("https://worker.test/admin/"),
       fixture.environment,
     );
-    expect(response.status).toBe(403);
-    expect((await response.json()) as object).toMatchObject({ error: { code: "ADMIN_REQUIRED" } });
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toContain("/login?returnTo=");
   });
 
-  it("requires both the Access identity and the D1 admin role", async () => {
-    const fixture = adminFixture("person@example.com");
-    await registerAndSignIn("person@example.com", fixture);
-    const response = await fixture.handler(adminRequest("/session"), fixture.environment);
-    expect(response.status).toBe(403);
-    expect((await response.json()) as object).toMatchObject({ error: { code: "ADMIN_REQUIRED" } });
-  });
-
-  it("bootstraps the owner after normal verification and exposes no user-generated content", async () => {
+  it("does not enumerate or email ordinary accounts through admin login", async () => {
     const fixture = adminFixture();
-    fixture.environment.ADMIN_BOOTSTRAP_EMAIL = "aliahadmd1@gmail.com";
-    await registerAndSignIn("aliahadmd1@gmail.com", fixture);
-    const session = await fixture.handler(adminRequest("/session"), fixture.environment);
+    await registerAndSignIn("person@example.com", fixture);
+    const sentBefore = fixture.sent.length;
+    const start = await fixture.handler(adminAuthRequest("/auth/start", {
+      email: "person@example.com",
+      turnstileToken: "turnstile-test-token",
+    }), fixture.environment);
+    expect(start.status).toBe(200);
+    expect(fixture.sent).toHaveLength(sentBefore);
+    const challengeId = ((await start.json()) as { challengeId: string }).challengeId;
+    const verify = await fixture.handler(adminAuthRequest("/auth/verify", {
+      challengeId,
+      code: "123456",
+    }), fixture.environment);
+    expect(verify.status).toBe(400);
+    expect((await verify.json()) as object).toMatchObject({ error: { code: "INVALID_CODE" } });
+  });
+
+  it("creates a secure first-party session for the D1 administrator", async () => {
+    const fixture = adminFixture();
+    const browser = await registerAndSignInAdmin(fixture);
+    const session = await fixture.handler(adminRequest("/session", browser), fixture.environment);
     expect(session.status).toBe(200);
     expect((await session.json()) as object).toMatchObject({
       admin: { email: "aliahadmd1@gmail.com", role: "admin" },
     });
+    expect(browser.setCookies.join(";")).toContain("HttpOnly");
+    expect(browser.setCookies.join(";")).toContain("SameSite=Strict");
+    expect(browser.setCookies.join(";")).toContain("Secure");
 
-    const users = await fixture.handler(adminRequest("/users?query=aliahadmd1%40gmail.com"), fixture.environment);
+    const users = await fixture.handler(adminRequest("/users?query=aliahadmd1%40gmail.com", browser), fixture.environment);
     const body = await users.json() as { users: Array<Record<string, unknown>> };
     expect(users.status).toBe(200);
     expect(body.users).toHaveLength(1);
@@ -349,8 +353,7 @@ describe("admin moderation", () => {
 
   it("suspends atomically, revokes sessions, audits, and permits a restricted re-login", async () => {
     const fixture = adminFixture();
-    fixture.environment.ADMIN_BOOTSTRAP_EMAIL = "aliahadmd1@gmail.com";
-    await registerAndSignIn("aliahadmd1@gmail.com", fixture);
+    const browser = await registerAndSignInAdmin(fixture);
     const member = await registerAndSignIn("member@example.com", fixture);
     const profile = await fixture.handler(
       new Request("https://worker.test/v1/me", { headers: bearer(member.accessToken) }),
@@ -358,7 +361,7 @@ describe("admin moderation", () => {
     );
     const memberId = ((await profile.json()) as { user: { id: string } }).user.id;
 
-    const suspension = await fixture.handler(adminRequest(`/users/${memberId}/status`, "POST", {
+    const suspension = await fixture.handler(adminRequest(`/users/${memberId}/status`, browser, "POST", {
       status: "suspended",
       suspendedUntil: Date.now() + 86_400_000,
       publicMessage: "Please contact support about this account.",
@@ -390,7 +393,7 @@ describe("admin moderation", () => {
     expect(denied.status).toBe(403);
     expect((await denied.json()) as object).toMatchObject({ error: { code: "ACCOUNT_SUSPENDED" } });
 
-    const audit = await fixture.handler(adminRequest("/audit?action=user_suspended"), fixture.environment);
+    const audit = await fixture.handler(adminRequest("/audit?action=user_suspended", browser), fixture.environment);
     expect((await audit.json()) as object).toMatchObject({
       audit: [{ targetUserId: memberId, action: "user_suspended", internalReason: "Automated abuse threshold review" }],
     });
@@ -398,8 +401,8 @@ describe("admin moderation", () => {
 
   it("rejects cross-origin mutations and protects the administrator from self-moderation", async () => {
     const fixture = adminFixture();
-    fixture.environment.ADMIN_BOOTSTRAP_EMAIL = "aliahadmd1@gmail.com";
-    const administrator = await registerAndSignIn("aliahadmd1@gmail.com", fixture);
+    const browser = await registerAndSignInAdmin(fixture);
+    const administrator = browser.android;
     const profile = await fixture.handler(
       new Request("https://worker.test/v1/me", { headers: bearer(administrator.accessToken) }),
       fixture.environment,
@@ -407,13 +410,14 @@ describe("admin moderation", () => {
     const administratorId = ((await profile.json()) as { user: { id: string } }).user.id;
     const wrongOrigin = await fixture.handler(adminRequest(
       `/users/${administratorId}/status`,
+      browser,
       "POST",
       { status: "banned", internalReason: "Attempted self ban" },
       "https://attacker.example",
     ), fixture.environment);
     expect(wrongOrigin.status).toBe(403);
 
-    const selfBan = await fixture.handler(adminRequest(`/users/${administratorId}/status`, "POST", {
+    const selfBan = await fixture.handler(adminRequest(`/users/${administratorId}/status`, browser, "POST", {
       status: "banned",
       internalReason: "Attempted self ban",
     }), fixture.environment);
@@ -435,9 +439,8 @@ describe("admin moderation", () => {
       }),
       polish: vi.fn(async () => ({ text: "Late text.", inputTokens: 10, outputTokens: 4 })),
     };
-    const fixture = adminFixture("aliahadmd1@gmail.com", services);
-    fixture.environment.ADMIN_BOOTSTRAP_EMAIL = "aliahadmd1@gmail.com";
-    await registerAndSignIn("aliahadmd1@gmail.com", fixture);
+    const fixture = adminFixture(services);
+    const browser = await registerAndSignInAdmin(fixture);
     const member = await registerAndSignIn("late-ban@example.com", fixture);
     const profile = await fixture.handler(
       new Request("https://worker.test/v1/me", { headers: bearer(member.accessToken) }),
@@ -447,7 +450,7 @@ describe("admin moderation", () => {
 
     const pending = fixture.handler(transcriptionRequest(makeWav(1), member.accessToken), fixture.environment);
     await started;
-    const ban = await fixture.handler(adminRequest(`/users/${memberId}/status`, "POST", {
+    const ban = await fixture.handler(adminRequest(`/users/${memberId}/status`, browser, "POST", {
       status: "banned",
       publicMessage: "Cloud access has been disabled.",
       internalReason: "Confirmed abuse during an active request",
@@ -461,6 +464,38 @@ describe("admin moderation", () => {
       "SELECT status FROM quota_reservations WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
     ).bind(memberId).first<{ status: string }>();
     expect(reservation?.status).toBe("released");
+  });
+
+  it("requires same-origin CSRF protection and revokes logout sessions", async () => {
+    const fixture = adminFixture();
+    const browser = await registerAndSignInAdmin(fixture);
+    const missingCsrf = await fixture.handler(adminRequest("/logout", { ...browser, csrf: "" }, "POST"), fixture.environment);
+    expect(missingCsrf.status).toBe(403);
+
+    const logout = await fixture.handler(adminRequest("/logout", browser, "POST"), fixture.environment);
+    expect(logout.status).toBe(204);
+    expect(logout.headers.getSetCookie().join(";")).toContain("Max-Age=0");
+    const expired = await fixture.handler(adminRequest("/session", browser), fixture.environment);
+    expect(expired.status).toBe(401);
+  });
+
+  it("expires idle browser sessions and rechecks the administrator account state", async () => {
+    const fixture = adminFixture();
+    const browser = await registerAndSignInAdmin(fixture);
+    await fixture.environment.DB.prepare(
+      "UPDATE admin_browser_sessions SET idle_expires_at = ? WHERE revoked_at IS NULL",
+    ).bind(Date.now() - 1).run();
+    const idleExpired = await fixture.handler(adminRequest("/session", browser), fixture.environment);
+    expect(idleExpired.status).toBe(401);
+
+    await fixture.environment.DB.prepare("DELETE FROM admin_login_challenges").run();
+    const fresh = await signInExistingAdmin(fixture);
+    await fixture.environment.DB.prepare(
+      "UPDATE users SET status = 'banned' WHERE role = 'admin'",
+    ).run();
+    const restricted = await fixture.handler(adminRequest("/session", fresh), fixture.environment);
+    expect(restricted.status).toBe(403);
+    expect((await restricted.json()) as object).toMatchObject({ error: { code: "ADMIN_REQUIRED" } });
   });
 });
 
@@ -510,7 +545,7 @@ function authFixture() {
   };
 }
 
-function adminFixture(identityEmail = "aliahadmd1@gmail.com", services: Services = fakeServices()) {
+function adminFixture(services: Services = fakeServices()) {
   const sent: Array<{ email: string; code: string }> = [];
   const moderation: Array<{ to: string; state: string }> = [];
   const authServices: AuthServices = {
@@ -518,7 +553,6 @@ function adminFixture(identityEmail = "aliahadmd1@gmail.com", services: Services
     sendCode: vi.fn(async (_environment, email, code) => { sent.push({ email, code }); }),
   };
   const adminServices: AdminServices = {
-    verifyAccessJwt: vi.fn(async () => ({ email: identityEmail })),
     sendModerationEmail: vi.fn(async (_environment, message) => {
       moderation.push({ to: message.to, state: message.state });
     }),
@@ -529,6 +563,50 @@ function adminFixture(identityEmail = "aliahadmd1@gmail.com", services: Services
     moderation,
     environment,
     handler: createHandler(services, authServices, adminServices),
+  };
+}
+
+interface AdminBrowserSession {
+  cookie: string;
+  csrf: string;
+  setCookies: string[];
+  android: { accessToken: string; refreshToken: string };
+}
+
+async function registerAndSignInAdmin(
+  fixture: ReturnType<typeof adminFixture>,
+): Promise<AdminBrowserSession> {
+  fixture.environment.ADMIN_BOOTSTRAP_EMAIL = "aliahadmd1@gmail.com";
+  const android = await registerAndSignIn("aliahadmd1@gmail.com", fixture);
+  return signInExistingAdmin(fixture, android);
+}
+
+async function signInExistingAdmin(
+  fixture: ReturnType<typeof adminFixture>,
+  android: { accessToken: string; refreshToken: string } = { accessToken: "", refreshToken: "" },
+): Promise<AdminBrowserSession> {
+  const start = await fixture.handler(adminAuthRequest("/auth/start", {
+    email: "aliahadmd1@gmail.com",
+    turnstileToken: "turnstile-test-token",
+  }), fixture.environment);
+  expect(start.status).toBe(200);
+  const challengeId = ((await start.json()) as { challengeId: string }).challengeId;
+  const code = fixture.sent.at(-1)?.code;
+  expect(code).toMatch(/^\d{6}$/u);
+  const verification = await fixture.handler(adminAuthRequest("/auth/verify", {
+    challengeId,
+    code,
+  }), fixture.environment);
+  expect(verification.status).toBe(200);
+  const setCookies = verification.headers.getSetCookie();
+  const values = setCookies.map((value) => value.split(";", 1)[0]);
+  const csrfPair = values.find((value) => value.startsWith("__Host-wovoice-admin-csrf="));
+  expect(csrfPair).toBeDefined();
+  return {
+    cookie: values.join("; "),
+    csrf: csrfPair?.slice(csrfPair.indexOf("=") + 1) ?? "",
+    setCookies,
+    android,
   };
 }
 
@@ -603,20 +681,38 @@ function jsonRequest(path: string, body: unknown, token?: string, method = "POST
 
 function adminRequest(
   path: string,
+  session: Pick<AdminBrowserSession, "cookie" | "csrf">,
   method = "GET",
   body?: unknown,
   origin = "https://worker.test",
 ): Request {
   const headers = new Headers({
-    "Cf-Access-Jwt-Assertion": "test-access-jwt",
     Accept: "application/json",
+    Cookie: session.cookie,
   });
-  if (!["GET", "HEAD"].includes(method)) headers.set("Origin", origin);
+  if (!["GET", "HEAD"].includes(method)) {
+    headers.set("Origin", origin);
+    headers.set("Sec-Fetch-Site", "same-origin");
+    if (session.csrf) headers.set("X-WoVoice-CSRF", session.csrf);
+  }
   if (body !== undefined) headers.set("Content-Type", "application/json");
   return new Request(`https://worker.test/admin/api/v1${path}`, {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+function adminAuthRequest(path: string, body: unknown): Request {
+  return new Request(`https://worker.test/admin/api/v1${path}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      Origin: "https://worker.test",
+      "Sec-Fetch-Site": "same-origin",
+    },
+    body: JSON.stringify(body),
   });
 }
 

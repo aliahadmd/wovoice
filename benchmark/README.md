@@ -4,11 +4,12 @@ Record each prompt in `utterances.json` as a mono 16 kHz PCM WAV named
 `01.wav` through `30.wav`. Use the phone in your normal speaking voice: 20 in a
 quiet room and 10 with mild everyday background noise, as marked in the file.
 
-Run the same recordings against each staging deployment:
+Run the same recordings against the production API with a short-lived WoVoice
+account access token:
 
 ```sh
-WOVOICE_WORKER_URL=https://your-staging-worker.workers.dev \
-WOVOICE_DEVICE_TOKEN=your-device-token \
+WOVOICE_WORKER_URL=https://wovoice.aliahad.com \
+WOVOICE_ACCESS_TOKEN=your-account-access-token \
 node benchmark/run.mjs benchmark/audio
 ```
 
