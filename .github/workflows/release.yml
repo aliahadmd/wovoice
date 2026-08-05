@@ -20,7 +20,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
-      WOVOICE_KEYSTORE_PATH: ${{ runner.temp }}/wovoice-release-v2.jks
+      WOVOICE_KEYSTORE_PATH: ${{ github.workspace }}/.release/wovoice-release-v2.jks
       WOVOICE_STORE_PASSWORD: ${{ secrets.WOVOICE_STORE_PASSWORD }}
       WOVOICE_KEY_ALIAS: ${{ secrets.WOVOICE_KEY_ALIAS }}
       WOVOICE_KEY_PASSWORD: ${{ secrets.WOVOICE_KEY_PASSWORD }}
@@ -60,6 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$WOVOICE_KEYSTORE_BASE64"
+          mkdir -p "$(dirname "$WOVOICE_KEYSTORE_PATH")"
           printf '%s' "$WOVOICE_KEYSTORE_BASE64" | base64 --decode > "$WOVOICE_KEYSTORE_PATH"
           chmod 600 "$WOVOICE_KEYSTORE_PATH"
 
