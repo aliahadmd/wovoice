@@ -398,3 +398,11 @@ The destination app controls the requested editor action. WoVoice follows that r
 - Free beta accounts currently receive 600 validated audio seconds per UTC day.
 - The manual keyboard has no autocorrect or word-suggestion strip.
 - Cost and neuron figures are estimates for WoVoice requests, not actual account billing.
+
+## License
+
+WoVoice is proprietary source-available software. Its source code may be viewed
+and evaluated, but copying, modification, redistribution, deployment, and
+commercial use are prohibited without prior written permission. See the
+[WoVoice Proprietary Source-Available License](LICENSE.md) for the complete
+terms.
