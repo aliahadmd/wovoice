@@ -77,8 +77,15 @@ jobs:
           test -f "$APK"
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           "$APKSIGNER" verify --verbose "$APK"
-          ACTUAL_CERT=$($APKSIGNER verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print toupper($2); exit}')
-          NORMALIZED_EXPECTED=$(printf '%s' "$EXPECTED_CERT" | tr -d ':' | tr '[:lower:]' '[:upper:]')
+          ACTUAL_CERT=$("$APKSIGNER" verify --print-certs "$APK" \
+            | awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print $2; exit}' \
+            | tr -d ':[:space:]' \
+            | tr '[:lower:]' '[:upper:]')
+          NORMALIZED_EXPECTED=$(printf '%s' "$EXPECTED_CERT" \
+            | tr -d ':[:space:]' \
+            | tr '[:lower:]' '[:upper:]')
+          test -n "$ACTUAL_CERT"
+          printf 'Verified release certificate SHA-256: %s\n' "$ACTUAL_CERT"
           test "$ACTUAL_CERT" = "$NORMALIZED_EXPECTED"
           mkdir -p release
           cp "$APK" "release/WoVoice-$RELEASE_VERSION.apk"
