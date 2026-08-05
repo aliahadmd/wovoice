@@ -1,4 +1,6 @@
 export type AsrModel = "whisper" | "nova-3";
+export type AccountRole = "user" | "admin";
+export type AccountState = "active" | "suspended" | "banned";
 
 export interface TranscriptionOptions {
   locale: "en-IN";
@@ -44,6 +46,10 @@ export type AppEnv = Omit<
   | "AUTH_MASTER_KEY"
   | "PII_KEY"
   | "TURNSTILE_SECRET"
+  | "ACCESS_TEAM_DOMAIN"
+  | "ACCESS_AUD"
+  | "SUPPORT_EMAIL"
+  | "ADMIN_BOOTSTRAP_EMAIL"
   | "CLIENT_TOKEN"
 > & {
   ASR_MODEL: string;
@@ -54,6 +60,10 @@ export type AppEnv = Omit<
   APP_ORIGIN: string;
   ENVIRONMENT: string;
   LEGACY_AUTH_DEADLINE: string;
+  ACCESS_TEAM_DOMAIN?: string;
+  ACCESS_AUD?: string;
+  SUPPORT_EMAIL?: string;
+  ADMIN_BOOTSTRAP_EMAIL?: string;
   CLIENT_TOKEN?: string;
 };
 
@@ -71,4 +81,25 @@ export interface Principal {
   userId: string;
   sessionId: string;
   legacy: boolean;
+  role: AccountRole;
+  accountState: AccountState;
+  suspendedUntil: number | null;
+  publicStatusMessage: string | null;
+}
+
+export interface AdminIdentity {
+  email: string;
+}
+
+export interface AdminServices {
+  verifyAccessJwt(env: AppEnv, token: string): Promise<AdminIdentity>;
+  sendModerationEmail(
+    env: AppEnv,
+    message: {
+      to: string;
+      state: AccountState;
+      publicMessage: string;
+      effectiveUntil: number | null;
+    },
+  ): Promise<void>;
 }

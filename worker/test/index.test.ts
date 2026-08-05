@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { base64Url, sha256 } from "../src/crypto";
 import { buildUsage, createHandler } from "../src/handler";
 import { completeQuota, releaseQuota, reserveQuota } from "../src/quota";
-import type { AppEnv, AuthServices, Services } from "../src/types";
+import type { AdminServices, AppEnv, AuthServices, Services } from "../src/types";
 import { chooseSafePolish } from "../src/validation";
 import { validateWav } from "../src/wav";
 
@@ -21,6 +21,9 @@ const PII_KEY = base64Url(new Uint8Array(32).fill(7));
 
 beforeEach(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+  // The Workers test database is shared for the file. Remove expired-style
+  // challenge state so repeated admin-account verification remains isolated.
+  await env.DB.prepare("DELETE FROM login_challenges").run();
 });
 
 describe("WoVoice Worker", () => {
@@ -45,6 +48,7 @@ describe("WoVoice Worker", () => {
       staging,
     );
     const stagingBody = JSON.stringify(await stagingResponse.json());
+    expect(stagingResponse.headers.get("cache-control")).toBe("no-store");
     expect(stagingBody).toContain("com.aliahad.wovoice.staging");
     expect(stagingBody).toContain("EC:F2:BE:43:B8:6F:94:29");
     expect(stagingBody).not.toContain("3A:E4:93:35:28:83:E2:7F");
@@ -59,7 +63,25 @@ describe("WoVoice Worker", () => {
     expect(productionBody).toContain('"package_name":"com.aliahad.wovoice"');
     expect(productionBody).not.toContain("com.aliahad.wovoice.staging");
     expect(productionBody).toContain("3A:E4:93:35:28:83:E2:7F");
-    expect(productionBody).not.toContain("EC:F2:BE:43:B8:6F:94:29");
+    expect(productionBody).toContain("EC:F2:BE:43:B8:6F:94:29");
+  });
+
+  it("serves callback recovery assets without caching authorization codes", async () => {
+    const environment = fakeEnv();
+    const fetchAsset = vi.fn(async () => new Response("callback", {
+      headers: { "Cache-Control": "public, max-age=3600", "Content-Type": "text/html" },
+    }));
+    environment.ASSETS = { fetch: fetchAsset } as unknown as Fetcher;
+
+    const response = await createHandler(fakeServices())(
+      new Request("https://wovoice.aliahad.com/app/callback?code=secret&state=state"),
+      environment,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(fetchAsset).toHaveBeenCalledOnce();
+    expect(await response.text()).toBe("callback");
   });
 
   it("rejects unauthenticated transcription before parsing audio", async () => {
@@ -287,6 +309,161 @@ describe("passwordless accounts", () => {
   });
 });
 
+describe("admin moderation", () => {
+  it("protects admin assets even when an external Access policy is absent", async () => {
+    const fixture = adminFixture();
+    const response = await fixture.handler(
+      new Request("https://worker.test/admin/"),
+      fixture.environment,
+    );
+    expect(response.status).toBe(403);
+    expect((await response.json()) as object).toMatchObject({ error: { code: "ADMIN_REQUIRED" } });
+  });
+
+  it("requires both the Access identity and the D1 admin role", async () => {
+    const fixture = adminFixture("person@example.com");
+    await registerAndSignIn("person@example.com", fixture);
+    const response = await fixture.handler(adminRequest("/session"), fixture.environment);
+    expect(response.status).toBe(403);
+    expect((await response.json()) as object).toMatchObject({ error: { code: "ADMIN_REQUIRED" } });
+  });
+
+  it("bootstraps the owner after normal verification and exposes no user-generated content", async () => {
+    const fixture = adminFixture();
+    fixture.environment.ADMIN_BOOTSTRAP_EMAIL = "aliahadmd1@gmail.com";
+    await registerAndSignIn("aliahadmd1@gmail.com", fixture);
+    const session = await fixture.handler(adminRequest("/session"), fixture.environment);
+    expect(session.status).toBe(200);
+    expect((await session.json()) as object).toMatchObject({
+      admin: { email: "aliahadmd1@gmail.com", role: "admin" },
+    });
+
+    const users = await fixture.handler(adminRequest("/users?query=aliahadmd1%40gmail.com"), fixture.environment);
+    const body = await users.json() as { users: Array<Record<string, unknown>> };
+    expect(users.status).toBe(200);
+    expect(body.users).toHaveLength(1);
+    expect(body.users[0]).not.toHaveProperty("ciphertext");
+    expect(body.users[0]).not.toHaveProperty("transcript");
+    expect(JSON.stringify(body)).not.toContain("aliahadmd1@gmail.com");
+  });
+
+  it("suspends atomically, revokes sessions, audits, and permits a restricted re-login", async () => {
+    const fixture = adminFixture();
+    fixture.environment.ADMIN_BOOTSTRAP_EMAIL = "aliahadmd1@gmail.com";
+    await registerAndSignIn("aliahadmd1@gmail.com", fixture);
+    const member = await registerAndSignIn("member@example.com", fixture);
+    const profile = await fixture.handler(
+      new Request("https://worker.test/v1/me", { headers: bearer(member.accessToken) }),
+      fixture.environment,
+    );
+    const memberId = ((await profile.json()) as { user: { id: string } }).user.id;
+
+    const suspension = await fixture.handler(adminRequest(`/users/${memberId}/status`, "POST", {
+      status: "suspended",
+      suspendedUntil: Date.now() + 86_400_000,
+      publicMessage: "Please contact support about this account.",
+      internalReason: "Automated abuse threshold review",
+    }), fixture.environment);
+    expect(suspension.status).toBe(200);
+    expect(fixture.moderation).toHaveLength(1);
+
+    const oldSession = await fixture.handler(
+      new Request("https://worker.test/v1/me", { headers: bearer(member.accessToken) }),
+      fixture.environment,
+    );
+    expect(oldSession.status).toBe(401);
+
+    await fixture.environment.DB.prepare("DELETE FROM login_challenges").run();
+    const restricted = await registerAndSignIn("member@example.com", fixture);
+    const restrictedProfile = await fixture.handler(
+      new Request("https://worker.test/v1/me", { headers: bearer(restricted.accessToken) }),
+      fixture.environment,
+    );
+    expect(restrictedProfile.status).toBe(200);
+    expect((await restrictedProfile.json()) as object).toMatchObject({
+      user: { accountStatus: { state: "suspended", publicMessage: "Please contact support about this account." } },
+    });
+    const denied = await fixture.handler(
+      transcriptionRequest(makeWav(1), restricted.accessToken),
+      fixture.environment,
+    );
+    expect(denied.status).toBe(403);
+    expect((await denied.json()) as object).toMatchObject({ error: { code: "ACCOUNT_SUSPENDED" } });
+
+    const audit = await fixture.handler(adminRequest("/audit?action=user_suspended"), fixture.environment);
+    expect((await audit.json()) as object).toMatchObject({
+      audit: [{ targetUserId: memberId, action: "user_suspended", internalReason: "Automated abuse threshold review" }],
+    });
+  });
+
+  it("rejects cross-origin mutations and protects the administrator from self-moderation", async () => {
+    const fixture = adminFixture();
+    fixture.environment.ADMIN_BOOTSTRAP_EMAIL = "aliahadmd1@gmail.com";
+    const administrator = await registerAndSignIn("aliahadmd1@gmail.com", fixture);
+    const profile = await fixture.handler(
+      new Request("https://worker.test/v1/me", { headers: bearer(administrator.accessToken) }),
+      fixture.environment,
+    );
+    const administratorId = ((await profile.json()) as { user: { id: string } }).user.id;
+    const wrongOrigin = await fixture.handler(adminRequest(
+      `/users/${administratorId}/status`,
+      "POST",
+      { status: "banned", internalReason: "Attempted self ban" },
+      "https://attacker.example",
+    ), fixture.environment);
+    expect(wrongOrigin.status).toBe(403);
+
+    const selfBan = await fixture.handler(adminRequest(`/users/${administratorId}/status`, "POST", {
+      status: "banned",
+      internalReason: "Attempted self ban",
+    }), fixture.environment);
+    expect(selfBan.status).toBe(409);
+    expect((await selfBan.json()) as object).toMatchObject({ error: { code: "INVALID_STATUS_TRANSITION" } });
+  });
+
+  it("blocks a transcription that finishes after the account is banned", async () => {
+    let releaseAsr: ((value: { text: string; model: "whisper-large-v3-turbo" }) => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const asr = new Promise<{ text: string; model: "whisper-large-v3-turbo" }>((resolve) => {
+      releaseAsr = resolve;
+    });
+    const services: Services = {
+      transcribe: vi.fn(async () => {
+        markStarted?.();
+        return asr;
+      }),
+      polish: vi.fn(async () => ({ text: "Late text.", inputTokens: 10, outputTokens: 4 })),
+    };
+    const fixture = adminFixture("aliahadmd1@gmail.com", services);
+    fixture.environment.ADMIN_BOOTSTRAP_EMAIL = "aliahadmd1@gmail.com";
+    await registerAndSignIn("aliahadmd1@gmail.com", fixture);
+    const member = await registerAndSignIn("late-ban@example.com", fixture);
+    const profile = await fixture.handler(
+      new Request("https://worker.test/v1/me", { headers: bearer(member.accessToken) }),
+      fixture.environment,
+    );
+    const memberId = ((await profile.json()) as { user: { id: string } }).user.id;
+
+    const pending = fixture.handler(transcriptionRequest(makeWav(1), member.accessToken), fixture.environment);
+    await started;
+    const ban = await fixture.handler(adminRequest(`/users/${memberId}/status`, "POST", {
+      status: "banned",
+      publicMessage: "Cloud access has been disabled.",
+      internalReason: "Confirmed abuse during an active request",
+    }), fixture.environment);
+    expect(ban.status).toBe(200);
+    releaseAsr?.({ text: "late text", model: "whisper-large-v3-turbo" });
+    const response = await pending;
+    expect(response.status).toBe(403);
+    expect((await response.json()) as object).toMatchObject({ error: { code: "ACCOUNT_BANNED" } });
+    const reservation = await fixture.environment.DB.prepare(
+      "SELECT status FROM quota_reservations WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+    ).bind(memberId).first<{ status: string }>();
+    expect(reservation?.status).toBe("released");
+  });
+});
+
 describe("output safety", () => {
   it("accepts punctuation-only cleanup", () => {
     expect(chooseSafePolish("this works right", "This works, right?")).toBe("This works, right?");
@@ -330,6 +507,28 @@ function authFixture() {
     sent,
     environment,
     handler: createHandler(fakeServices(), authServices),
+  };
+}
+
+function adminFixture(identityEmail = "aliahadmd1@gmail.com", services: Services = fakeServices()) {
+  const sent: Array<{ email: string; code: string }> = [];
+  const moderation: Array<{ to: string; state: string }> = [];
+  const authServices: AuthServices = {
+    verifyTurnstile: vi.fn(async () => true),
+    sendCode: vi.fn(async (_environment, email, code) => { sent.push({ email, code }); }),
+  };
+  const adminServices: AdminServices = {
+    verifyAccessJwt: vi.fn(async () => ({ email: identityEmail })),
+    sendModerationEmail: vi.fn(async (_environment, message) => {
+      moderation.push({ to: message.to, state: message.state });
+    }),
+  };
+  const environment = fakeEnv();
+  return {
+    sent,
+    moderation,
+    environment,
+    handler: createHandler(services, authServices, adminServices),
   };
 }
 
@@ -400,6 +599,25 @@ function jsonRequest(path: string, body: unknown, token?: string, method = "POST
   const headers = new Headers({ "Content-Type": "application/json" });
   if (token) headers.set("Authorization", `Bearer ${token}`);
   return new Request(`https://worker.test${path}`, { method, headers, body: JSON.stringify(body) });
+}
+
+function adminRequest(
+  path: string,
+  method = "GET",
+  body?: unknown,
+  origin = "https://worker.test",
+): Request {
+  const headers = new Headers({
+    "Cf-Access-Jwt-Assertion": "test-access-jwt",
+    Accept: "application/json",
+  });
+  if (!["GET", "HEAD"].includes(method)) headers.set("Origin", origin);
+  if (body !== undefined) headers.set("Content-Type", "application/json");
+  return new Request(`https://worker.test/admin/api/v1${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
 }
 
 function legacyTranscriptionRequest(audio: ArrayBuffer): Request {

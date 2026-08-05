@@ -17,11 +17,35 @@ class SessionManager private constructor(context: Context) {
     @Volatile private var accessToken: String? = null
     @Volatile private var accessExpiresAtMs: Long = 0
     @Volatile private var quota: AccountQuota? = null
+    @Volatile private var user: AccountUser? = storedUser()
 
     val signedIn: Boolean get() = settings.isSignedIn()
     val accountId: String? get() = settings.accountId
     val email: String? get() = settings.accountEmail
     val currentQuota: AccountQuota? get() = quota
+    val currentUser: AccountUser? get() = user
+    val role: AccountRole get() = user?.role ?: AccountRole.fromWire(settings.accountRole)
+    val accountStatus: AccountStatus get() = user?.accountStatus ?: storedStatus()
+    val cloudServicesAllowed: Boolean get() = signedIn && !accountStatus.state.restricted
+
+    fun markRestricted(code: String, message: String, suspendedUntilMs: Long? = null) {
+        val state = when (code) {
+            "ACCOUNT_SUSPENDED" -> AccountState.SUSPENDED
+            "ACCOUNT_BANNED" -> AccountState.BANNED
+            else -> return
+        }
+        val current = user ?: storedUser() ?: return
+        installUser(
+            current.copy(
+                accountStatus = AccountStatus(
+                    state = state,
+                    suspendedUntilMs = if (state == AccountState.SUSPENDED) suspendedUntilMs else null,
+                    publicMessage = message.trim().takeIf(String::isNotBlank),
+                    supportEmail = current.accountStatus.supportEmail,
+                ),
+            ),
+        )
+    }
 
     fun prepareLogin(intent: String = AUTH_LOGIN): PkceRequest = Pkce.create().also { request ->
         require(intent == AUTH_LOGIN || intent == AUTH_DELETE)
@@ -104,8 +128,7 @@ class SessionManager private constructor(context: Context) {
         }
         return when (val result = client.profile(token)) {
             is AccountResult.Success -> {
-                settings.accountId = result.value.user.id
-                settings.accountEmail = result.value.user.email
+                installUser(result.value.user)
                 quota = result.value.quota
                 result
             }
@@ -114,8 +137,7 @@ class SessionManager private constructor(context: Context) {
                     when (val refreshed = refreshAfterRejected(token)) {
                         is AccountResult.Success -> client.profile(refreshed.value).also { second ->
                             if (second is AccountResult.Success) {
-                                settings.accountId = second.value.user.id
-                                settings.accountEmail = second.value.user.email
+                                installUser(second.value.user)
                                 quota = second.value.quota
                             }
                         }
@@ -152,6 +174,7 @@ class SessionManager private constructor(context: Context) {
         accessToken = null
         accessExpiresAtMs = 0
         quota = null
+        user = null
         settings.clearAccount()
     }
 
@@ -178,8 +201,39 @@ class SessionManager private constructor(context: Context) {
         accessExpiresAtMs = System.currentTimeMillis() + tokens.accessExpiresInSeconds * 1_000L
         secrets.putString(SecretStore.REFRESH_TOKEN, tokens.refreshToken)
         settings.accountId = tokens.user.id
-        settings.accountEmail = tokens.user.email
+        installUser(tokens.user)
     }
+
+    private fun installUser(value: AccountUser) {
+        user = value
+        settings.accountId = value.id
+        settings.accountEmail = value.email
+        settings.accountRole = value.role.name.lowercase()
+        settings.accountState = value.accountStatus.state.name.lowercase()
+        settings.accountSuspendedUntilMs = value.accountStatus.suspendedUntilMs
+        settings.accountPublicMessage = value.accountStatus.publicMessage
+        settings.accountSupportEmail = value.accountStatus.supportEmail
+    }
+
+    private fun storedUser(): AccountUser? {
+        val id = settings.accountId ?: return null
+        val email = settings.accountEmail ?: return null
+        return AccountUser(
+            id = id,
+            email = email,
+            vaultConfigured = false,
+            vaultKeyVersion = null,
+            role = AccountRole.fromWire(settings.accountRole),
+            accountStatus = storedStatus(),
+        )
+    }
+
+    private fun storedStatus(): AccountStatus = AccountStatus(
+        state = AccountState.fromWire(settings.accountState),
+        suspendedUntilMs = settings.accountSuspendedUntilMs,
+        publicMessage = settings.accountPublicMessage,
+        supportEmail = settings.accountSupportEmail,
+    )
 
     private fun clearPendingLogin() {
         secrets.remove(SecretStore.PENDING_PKCE_VERIFIER)

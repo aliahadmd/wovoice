@@ -1,10 +1,12 @@
 import { ApiError, errorResponse } from "./errors";
+import { handleAdminRoute, productionAdminServices } from "./admin";
 import { authenticateAccess, handleAccountRoute, handleAuthRoute, productionAuthServices } from "./auth";
 import { productionServices } from "./models";
 import { parseOptions } from "./options";
 import { completeQuota, releaseQuota, reserveQuota, type QuotaReservation } from "./quota";
 import { handleSyncRoute } from "./sync";
-import type { AppEnv, AuthServices, Principal, Services } from "./types";
+import { recordActivity, recheckActiveAccount, requireActiveAccount } from "./moderation";
+import type { AdminServices, AppEnv, AuthServices, Principal, Services } from "./types";
 import { chooseSafePolish } from "./validation";
 import { readBodyLimited, validateWav } from "./wav";
 
@@ -26,16 +28,32 @@ const DEBUG_CERT_SHA256 =
 export function createHandler(
   services: Services = productionServices,
   authServices: AuthServices = productionAuthServices,
+  adminServices: AdminServices = productionAdminServices,
 ) {
-  return async (request: Request, env: AppEnv): Promise<Response> => {
+  return async (request: Request, env: AppEnv, ctx?: ExecutionContext): Promise<Response> => {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/.well-known/assetlinks.json") {
       return Response.json(androidAssetLinks(env), {
         headers: {
-          "cache-control": "public, max-age=300",
+          // Signing identities may change during an app-key migration. Always
+          // let Android retrieve the current association instead of an edge-stale copy.
+          "cache-control": "no-store",
           "content-type": "application/json; charset=utf-8",
         },
       });
+    }
+    if (
+      request.method === "GET"
+      && (
+        url.pathname === "/app/callback"
+        || url.pathname === "/app/callback.html"
+        || url.pathname === "/app/callback.js"
+      )
+    ) {
+      const asset = await env.ASSETS.fetch(request);
+      const headers = new Headers(asset.headers);
+      headers.set("cache-control", "no-store");
+      return new Response(asset.body, { status: asset.status, headers });
     }
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/v1/status")) {
       return Response.json({
@@ -59,8 +77,16 @@ export function createHandler(
     let principal: Principal | null = null;
     let reservation: QuotaReservation | null = null;
     let quotaCompleted = false;
+    let audioSeconds = 0;
+    let estimatedCostUsd = 0;
+    let outcomeCode: string | null = null;
 
     try {
+      const adminResponse = await handleAdminRoute(request, env, requestId, adminServices, ctx);
+      if (adminResponse) {
+        status = adminResponse.status;
+        return adminResponse;
+      }
       const authResponse = await handleAuthRoute(request, env, authServices, requestId);
       if (authResponse) {
         status = authResponse.status;
@@ -78,6 +104,7 @@ export function createHandler(
       }
 
       principal = await authenticatePrincipal(request, env, url);
+      if (!principal.legacy) principal = await requireActiveAccount(env, principal);
       const rate = await env.RATE_LIMITER.limit({ key: principal.userId });
       if (!rate.success) {
         throw new ApiError(429, "RATE_LIMITED", true, "Too many recordings. Please wait a moment.", 60);
@@ -110,6 +137,7 @@ export function createHandler(
       const audio = await file.arrayBuffer();
       audioBytes = audio.byteLength;
       const wav = validateWav(audio);
+      audioSeconds = wav.durationSeconds;
       if (!principal.legacy) {
         reservation = await reserveQuota(env, principal.userId, requestId, wav.durationSeconds);
       }
@@ -143,6 +171,10 @@ export function createHandler(
         polishMs = Math.round(performance.now() - polishStartedAt);
         const usage = buildUsage(selectedModel, wav.durationSeconds, polishTokens);
         totalNeurons = usage?.totalNeurons ?? null;
+        estimatedCostUsd = usage?.estimatedCostUsd ?? 0;
+        if (principal && !principal.legacy) {
+          principal = await recheckActiveAccount(env, principal);
+        }
         if (reservation) {
           await completeQuota(env, reservation, totalNeurons ?? reservation.reservedNeurons);
           quotaCompleted = true;
@@ -168,6 +200,7 @@ export function createHandler(
         if (controller.signal.aborted) {
           throw new ApiError(504, "INFERENCE_TIMEOUT", true, "Transcription took too long. Please try again.");
         }
+        if (error instanceof ApiError) throw error;
         throw new ApiError(502, "INFERENCE_FAILED", true, "Transcription failed. Please try again.");
       } finally {
         clearTimeout(timeout);
@@ -178,6 +211,7 @@ export function createHandler(
           ? error
           : new ApiError(500, "INFERENCE_FAILED", true, "Something went wrong. Please try again.");
       status = safeError.status;
+      outcomeCode = safeError.code;
       return errorResponse(safeError, requestId);
     } finally {
       if (reservation && !quotaCompleted) {
@@ -186,6 +220,26 @@ export function createHandler(
         } catch {
           // The scheduled cleanup releases any reservation left by an interrupted request.
         }
+      }
+      if (principal && !principal.legacy && url.pathname === "/v1/transcriptions") {
+        const activity = recordActivity(env, {
+          userId: principal.userId,
+          type: status === 200
+            ? "transcription_succeeded"
+            : outcomeCode === "USER_QUOTA_EXCEEDED" || outcomeCode === "SERVICE_DAILY_LIMIT_REACHED"
+              ? "quota_rejected"
+              : "transcription_failed",
+          requestId,
+          statusCode: status,
+          outcomeCode: outcomeCode ?? undefined,
+          model: selectedModel,
+          audioSeconds,
+          estimatedNeurons: totalNeurons ?? undefined,
+          estimatedCostUsd,
+          latencyMs: Math.round(performance.now() - startedAt),
+        });
+        if (ctx) ctx.waitUntil(activity);
+        else await activity;
       }
       console.log(
         JSON.stringify({
@@ -210,14 +264,19 @@ export function createHandler(
 
 function androidAssetLinks(env: AppEnv): unknown[] {
   const staging = env.ENVIRONMENT === "staging";
-  const fingerprint = staging ? DEBUG_CERT_SHA256 : RELEASE_CERT_SHA256;
+  // The production package has two legitimate installed signing identities:
+  // the release signer used for public APKs and the legacy signer used by the
+  // original private installation. Android supports listing both fingerprints.
+  const fingerprints = staging
+    ? [DEBUG_CERT_SHA256]
+    : [RELEASE_CERT_SHA256, DEBUG_CERT_SHA256];
   return [
     {
       relation: ["delegate_permission/common.handle_all_urls"],
       target: {
         namespace: "android_app",
         package_name: staging ? "com.aliahad.wovoice.staging" : "com.aliahad.wovoice",
-        sha256_cert_fingerprints: [fingerprint],
+        sha256_cert_fingerprints: fingerprints,
       },
     },
   ];
@@ -277,7 +336,15 @@ async function authenticatePrincipal(request: Request, env: AppEnv, url: URL): P
   if (url.hostname === "wovoice-transcription.aliahad.workers.dev" && await matchesLegacyToken(request, env)) {
     const deadline = Date.parse(env.LEGACY_AUTH_DEADLINE);
     if (Number.isFinite(deadline) && Date.now() < deadline) {
-      return { userId: "legacy", sessionId: "legacy", legacy: true };
+      return {
+        userId: "legacy",
+        sessionId: "legacy",
+        legacy: true,
+        role: "user",
+        accountState: "active",
+        suspendedUntil: null,
+        publicStatusMessage: null,
+      };
     }
     throw new ApiError(426, "UPGRADE_REQUIRED", false, "Upgrade WoVoice to continue using voice input.");
   }

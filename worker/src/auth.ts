@@ -1,7 +1,15 @@
 import { ApiError } from "./errors";
 import { decryptString, encryptString, hmac, randomCode, randomToken, sha256, timingSafeEqual } from "./crypto";
 import { noStoreJson, readJson } from "./http";
-import type { AppEnv, AuthServices, Principal } from "./types";
+import {
+  accountStatusValue,
+  effectiveDailyAudioLimit,
+  recordActivity,
+  requireActiveAccount,
+  restoreExpiredAccount,
+  type AccountControlRow,
+} from "./moderation";
+import type { AccountRole, AccountState, AppEnv, AuthServices, Principal } from "./types";
 
 const CODE_LIFETIME_MS = 10 * 60_000;
 const CODE_RESEND_MS = 60_000;
@@ -9,7 +17,7 @@ const AUTHORIZATION_CODE_MS = 60_000;
 const ACCESS_TOKEN_MS = 15 * 60_000;
 const REFRESH_TOKEN_MS = 30 * 24 * 60 * 60_000;
 const SESSION_ABSOLUTE_MS = 180 * 24 * 60 * 60_000;
-const POLICY_VERSION = "2026-08-05";
+const POLICY_VERSION = "2026-08-05-admin-v1";
 
 interface ChallengeRow {
   id: string;
@@ -25,13 +33,19 @@ interface ChallengeRow {
   consumed_at: number | null;
 }
 
-interface UserRow {
+interface UserRow extends AccountControlRow {
   id: string;
   email_ciphertext: string;
   email_nonce: string;
   wrapped_vault_key: string | null;
   wrapped_vault_nonce: string | null;
   vault_key_version: number | null;
+  role: AccountRole;
+  status: AccountState;
+  suspended_until: number | null;
+  public_status_message: string | null;
+  quota_limit_audio_seconds: number | null;
+  quota_override_expires_at: number | null;
 }
 
 interface AuthorizationCodeRow {
@@ -50,6 +64,10 @@ interface AccessRow {
   access_expires_at: number;
   absolute_expires_at: number;
   revoked_at: number | null;
+  role: AccountRole;
+  status: AccountState;
+  suspended_until: number | null;
+  public_status_message: string | null;
 }
 
 interface RefreshRow {
@@ -117,6 +135,12 @@ export async function handleAuthRoute(
     await env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE id = ? AND user_id = ?")
       .bind(Date.now(), principal.sessionId, principal.userId)
       .run();
+    await recordActivity(env, {
+      userId: principal.userId,
+      type: "logout",
+      requestId,
+      statusCode: 204,
+    });
     return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
   }
   return null;
@@ -241,6 +265,7 @@ async function verifyCode(request: Request, env: AppEnv, requestId: string): Pro
     invalidCode();
   }
 
+  let createdUser = false;
   let user = await env.DB.prepare("SELECT * FROM users WHERE email_lookup = ?")
     .bind(challenge.email_lookup)
     .first<UserRow>();
@@ -261,6 +286,7 @@ async function verifyCode(request: Request, env: AppEnv, requestId: string): Pro
         now,
         POLICY_VERSION,
       ).run();
+      createdUser = true;
     } catch {
       // Another verification for the same address may have won the uniqueness race.
     }
@@ -294,11 +320,29 @@ async function verifyCode(request: Request, env: AppEnv, requestId: string): Pro
     verificationStatements.push(
       env.DB.prepare("UPDATE users SET terms_version = ? WHERE id = ?").bind(POLICY_VERSION, user.id),
     );
+    const bootstrapEmail = env.ADMIN_BOOTSTRAP_EMAIL?.trim();
+    if (bootstrapEmail) {
+      const bootstrapLookup = await hmac(env.AUTH_MASTER_KEY, `email:${normalizeEmail(bootstrapEmail)}`);
+      if (timingSafeEqual(bootstrapLookup, challenge.email_lookup)) {
+        verificationStatements.push(
+          env.DB.prepare("UPDATE users SET role = 'admin' WHERE id = ? AND role = 'user'").bind(user.id),
+        );
+      }
+    }
   }
   try {
     await env.DB.batch(verificationStatements);
   } catch {
     invalidCode();
+  }
+  if (createdUser) {
+    await recordActivity(env, {
+      userId: user.id,
+      type: "account_created",
+      requestId,
+      statusCode: 200,
+      createdAt: now,
+    });
   }
   return noStoreJson(
     challenge.intent === "delete"
@@ -341,6 +385,14 @@ async function exchangeCode(request: Request, env: AppEnv, requestId: string): P
   } catch {
     throw new ApiError(401, "AUTH_REQUIRED", false, "The sign-in request was already used. Please start again.");
   }
+  await recordActivity(env, {
+    userId: row.user_id,
+    type: "login_succeeded",
+    requestId,
+    statusCode: 200,
+    deviceName,
+    createdAt: now,
+  });
   return noStoreJson({ requestId, ...tokens, user: await publicUser(env, row.user_id) });
 }
 
@@ -443,8 +495,9 @@ export async function authenticateAccess(request: Request, env: AppEnv): Promise
   if (!token) throw new ApiError(401, "AUTH_REQUIRED", false, "Sign in to continue.");
   const accessHash = await hmac(env.AUTH_MASTER_KEY, `access:${token}`);
   const row = await env.DB.prepare(
-    `SELECT id AS session_id, user_id, access_expires_at, absolute_expires_at, revoked_at
-     FROM sessions WHERE access_hash = ?`,
+    `SELECT s.id AS session_id, s.user_id, s.access_expires_at, s.absolute_expires_at, s.revoked_at,
+            u.role, u.status, u.suspended_until, u.public_status_message
+     FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.access_hash = ?`,
   ).bind(accessHash).first<AccessRow>();
   if (!row || row.revoked_at !== null || row.absolute_expires_at < Date.now()) {
     throw new ApiError(401, "AUTH_REQUIRED", false, "Sign in to continue.");
@@ -452,7 +505,15 @@ export async function authenticateAccess(request: Request, env: AppEnv): Promise
   if (row.access_expires_at < Date.now()) {
     throw new ApiError(401, "TOKEN_EXPIRED", true, "Your session needs to be refreshed.");
   }
-  return { userId: row.user_id, sessionId: row.session_id, legacy: false };
+  return {
+    userId: row.user_id,
+    sessionId: row.session_id,
+    legacy: false,
+    role: row.role,
+    accountState: row.status,
+    suspendedUntil: row.suspended_until,
+    publicStatusMessage: row.public_status_message,
+  };
 }
 
 export async function handleAccountRoute(
@@ -469,6 +530,7 @@ export async function handleAccountRoute(
     return noStoreJson({ requestId, user, quota });
   }
   if (request.method === "GET" && url.pathname === "/v1/me/sessions") {
+    await requireActiveAccount(env, principal);
     const result = await env.DB.prepare(
       `SELECT id, device_name AS deviceName, created_at AS createdAt, last_seen_at AS lastSeenAt,
               CASE WHEN id = ? THEN 1 ELSE 0 END AS current
@@ -478,10 +540,17 @@ export async function handleAccountRoute(
     return noStoreJson({ requestId, sessions: result.results });
   }
   if (request.method === "DELETE" && url.pathname.startsWith("/v1/me/sessions/")) {
+    await requireActiveAccount(env, principal);
     const sessionId = decodeURIComponent(url.pathname.slice("/v1/me/sessions/".length));
     await env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE id = ? AND user_id = ?")
       .bind(Date.now(), sessionId, principal.userId)
       .run();
+    await recordActivity(env, {
+      userId: principal.userId,
+      type: "session_revoked",
+      requestId,
+      statusCode: 204,
+    });
     return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
   }
   if (request.method === "DELETE" && url.pathname === "/v1/me") {
@@ -501,30 +570,47 @@ export async function handleAccountRoute(
 }
 
 async function publicUser(env: AppEnv, userId: string): Promise<object> {
-  const user = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<UserRow>();
+  let user = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<UserRow>();
   if (!user) throw new ApiError(401, "AUTH_REQUIRED", false, "Sign in to continue.");
+  if (user.status === "suspended" && user.suspended_until !== null && user.suspended_until <= Date.now()) {
+    if (await restoreExpiredAccount(env, userId)) {
+      user = { ...user, status: "active", suspended_until: null, public_status_message: null };
+    }
+  }
   const email = await decryptString(env.PII_KEY, user.email_ciphertext, user.email_nonce);
   return {
     id: user.id,
     email,
     vaultConfigured: user.wrapped_vault_key !== null,
     vaultKeyVersion: user.vault_key_version,
+    role: user.role,
+    accountStatus: {
+      ...accountStatusValue(user),
+      supportEmail: env.SUPPORT_EMAIL?.trim() || "support@aliahad.com",
+    },
   };
 }
 
 async function quotaSnapshot(env: AppEnv, userId: string): Promise<object> {
   const dateKey = utcDateKey();
-  const row = await env.DB.prepare(
-    "SELECT used_audio_seconds, reserved_audio_seconds FROM daily_usage WHERE user_id = ? AND date_key = ?",
-  ).bind(userId, dateKey).first<{ used_audio_seconds: number; reserved_audio_seconds: number }>();
-  const used = row?.used_audio_seconds ?? 0;
-  const reserved = row?.reserved_audio_seconds ?? 0;
+  const [usage, user] = await Promise.all([
+    env.DB.prepare(
+      "SELECT used_audio_seconds, reserved_audio_seconds FROM daily_usage WHERE user_id = ? AND date_key = ?",
+    ).bind(userId, dateKey).first<{ used_audio_seconds: number; reserved_audio_seconds: number }>(),
+    env.DB.prepare(
+      "SELECT quota_limit_audio_seconds, quota_override_expires_at FROM users WHERE id = ?",
+    ).bind(userId).first<Pick<UserRow, "quota_limit_audio_seconds" | "quota_override_expires_at">>(),
+  ]);
+  const used = usage?.used_audio_seconds ?? 0;
+  const reserved = usage?.reserved_audio_seconds ?? 0;
+  const limit = user ? effectiveDailyAudioLimit(user) : 600;
   const resetAt = Date.parse(`${new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)}T00:00:00.000Z`);
   return {
-    limitAudioSeconds: 600,
+    limitAudioSeconds: limit,
     usedAudioSeconds: used,
     reservedAudioSeconds: reserved,
-    remainingAudioSeconds: Math.max(0, 600 - used - reserved),
+    remainingAudioSeconds: Math.max(0, limit - used - reserved),
+    overrideExpiresAt: user?.quota_override_expires_at ?? null,
     resetAt,
   };
 }

@@ -10,6 +10,9 @@
     "test": "vitest run",
     "types": "wrangler types"
   },
+  "dependencies": {
+    "jose": "6.2.8"
+  },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.20.1",
     "@types/node": "26.1.2",

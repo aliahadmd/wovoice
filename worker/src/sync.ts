@@ -1,6 +1,7 @@
 import { authenticateAccess } from "./auth";
 import { ApiError, errorResponse } from "./errors";
 import { noStoreJson, readJson } from "./http";
+import { recordActivity, requireActiveAccount } from "./moderation";
 import type { AppEnv } from "./types";
 
 const ITEM_TYPES = new Set(["history", "dictionary", "analytics"]);
@@ -31,7 +32,7 @@ interface SyncItemRow {
 export async function handleSyncRoute(request: Request, env: AppEnv, requestId: string): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/v1/sync")) return null;
-  const principal = await authenticateAccess(request, env);
+  const principal = await requireActiveAccount(env, await authenticateAccess(request, env));
   if (request.method === "GET" && url.pathname === "/v1/sync/vault") {
     const row = await env.DB.prepare(
       "SELECT wrapped_vault_key, wrapped_vault_nonce, vault_key_version FROM users WHERE id = ?",
@@ -95,6 +96,13 @@ export async function handleSyncRoute(request: Request, env: AppEnv, requestId: 
        ORDER BY c.seq ASC LIMIT ?`,
     ).bind(principal.userId, cursor, limit).all<SyncItemRow & { seq: number }>();
     const nextCursor = rows.results.reduce((latest, row) => Math.max(latest, row.seq), cursor);
+    await recordActivity(env, {
+      userId: principal.userId,
+      type: "sync_pulled",
+      requestId,
+      statusCode: 200,
+      itemCount: rows.results.length,
+    });
     return noStoreJson({
       requestId,
       nextCursor,
@@ -125,6 +133,14 @@ export async function handleSyncRoute(request: Request, env: AppEnv, requestId: 
       return currentVersion === item.baseVersion ? [] : [current ? publicSyncItem(current) : { id: item.id, type: item.type, version: 0 }];
     });
     if (conflicts.length) {
+      await recordActivity(env, {
+        userId: principal.userId,
+        type: "sync_conflict",
+        requestId,
+        statusCode: 409,
+        outcomeCode: "SYNC_CONFLICT",
+        itemCount: conflicts.length,
+      });
       const response = errorResponse(
         new ApiError(409, "SYNC_CONFLICT", false, "One or more encrypted records changed on another device."),
         requestId,
@@ -179,8 +195,23 @@ export async function handleSyncRoute(request: Request, env: AppEnv, requestId: 
         requestId,
       );
       const value = await response.json() as Record<string, unknown>;
+      await recordActivity(env, {
+        userId: principal.userId,
+        type: "sync_conflict",
+        requestId,
+        statusCode: 409,
+        outcomeCode: "SYNC_CONFLICT",
+        itemCount: writes.length,
+      });
       return noStoreJson({ ...value, conflicts: latest.filter(Boolean).map((item) => publicSyncItem(item!)) }, { status: 409 });
     }
+    await recordActivity(env, {
+      userId: principal.userId,
+      type: "sync_pushed",
+      requestId,
+      statusCode: 200,
+      itemCount: applied.length,
+    });
     return noStoreJson({ requestId, applied });
   }
   return null;

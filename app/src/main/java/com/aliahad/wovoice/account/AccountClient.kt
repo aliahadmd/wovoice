@@ -11,6 +11,40 @@ data class AccountUser(
     val email: String,
     val vaultConfigured: Boolean,
     val vaultKeyVersion: Int?,
+    val role: AccountRole = AccountRole.USER,
+    val accountStatus: AccountStatus = AccountStatus(),
+)
+
+enum class AccountRole {
+    USER,
+    ADMIN;
+
+    companion object {
+        fun fromWire(value: String?): AccountRole = if (value.equals("admin", ignoreCase = true)) ADMIN else USER
+    }
+}
+
+enum class AccountState {
+    ACTIVE,
+    SUSPENDED,
+    BANNED;
+
+    val restricted: Boolean get() = this != ACTIVE
+
+    companion object {
+        fun fromWire(value: String?): AccountState = when (value?.lowercase()) {
+            "suspended" -> SUSPENDED
+            "banned" -> BANNED
+            else -> ACTIVE
+        }
+    }
+}
+
+data class AccountStatus(
+    val state: AccountState = AccountState.ACTIVE,
+    val suspendedUntilMs: Long? = null,
+    val publicMessage: String? = null,
+    val supportEmail: String = "support@aliahad.com",
 )
 
 data class AccountQuota(
@@ -19,6 +53,7 @@ data class AccountQuota(
     val reservedAudioSeconds: Double,
     val remainingAudioSeconds: Double,
     val resetAtMs: Long,
+    val overrideExpiresAtMs: Long? = null,
 )
 
 data class AccountProfile(val user: AccountUser, val quota: AccountQuota?)
@@ -184,6 +219,17 @@ class AccountClient(private val baseUrl: String) {
         email = json.getString("email"),
         vaultConfigured = json.optBoolean("vaultConfigured"),
         vaultKeyVersion = if (json.isNull("vaultKeyVersion")) null else json.optInt("vaultKeyVersion"),
+        role = AccountRole.fromWire(json.optString("role")),
+        accountStatus = json.optJSONObject("accountStatus")?.let { status ->
+            AccountStatus(
+                state = AccountState.fromWire(status.optString("state")),
+                suspendedUntilMs = status.optNullableLong("suspendedUntil"),
+                publicMessage = status.optNullableString("publicMessage"),
+                supportEmail = status.optString("supportEmail")
+                    .takeIf(String::isNotBlank)
+                    ?: "support@aliahad.com",
+            )
+        } ?: AccountStatus(),
     )
 
     private fun parseQuota(json: JSONObject) = AccountQuota(
@@ -192,6 +238,7 @@ class AccountClient(private val baseUrl: String) {
         reservedAudioSeconds = json.optDouble("reservedAudioSeconds"),
         remainingAudioSeconds = json.optDouble("remainingAudioSeconds"),
         resetAtMs = json.optLong("resetAt"),
+        overrideExpiresAtMs = json.optNullableLong("overrideExpiresAt"),
     )
 
     private fun parseError(body: String, status: Int): AccountResult.Error = runCatching {
@@ -230,3 +277,9 @@ class AccountClient(private val baseUrl: String) {
         const val MAX_RESPONSE_CHARS = 256_000
     }
 }
+
+private fun JSONObject.optNullableLong(key: String): Long? =
+    if (!has(key) || isNull(key)) null else optLong(key).takeIf { it > 0L }
+
+private fun JSONObject.optNullableString(key: String): String? =
+    if (!has(key) || isNull(key)) null else optString(key).trim().takeIf(String::isNotBlank)

@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "wovoice-transcription",
   "main": "src/index.ts",
-  "compatibility_date": "2026-08-04",
+  "compatibility_date": "2026-08-05",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "routes": [
@@ -17,7 +17,7 @@
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
-    "run_worker_first": ["/v1/*", "/.well-known/*"]
+    "run_worker_first": ["/v1/*", "/.well-known/*", "/app/callback*", "/admin*"]
   },
   "d1_databases": [
     {
@@ -55,6 +55,9 @@
     "ASR_MODEL": "whisper",
     "APP_ORIGIN": "https://wovoice.aliahad.com",
     "ENVIRONMENT": "production",
+    "SUPPORT_EMAIL": "support@aliahad.com",
+    "ACCESS_TEAM_DOMAIN": "https://aliahad.cloudflareaccess.com",
+    "ACCESS_AUD": "1833695a70385a3596ef01e20da48ff12a64a6cffdd741e36de64b5395ebe522",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAEGXORiDrI06ZVTr",
     "LEGACY_AUTH_DEADLINE": "2026-08-11T19:00:00.000Z"
   },
@@ -83,7 +86,7 @@
       "assets": {
         "directory": "./public",
         "binding": "ASSETS",
-        "run_worker_first": ["/v1/*", "/.well-known/*"]
+        "run_worker_first": ["/v1/*", "/.well-known/*", "/app/callback*", "/admin*"]
       },
       "d1_databases": [
         {
@@ -121,6 +124,9 @@
         "ASR_MODEL": "whisper",
         "APP_ORIGIN": "https://staging.wovoice.aliahad.com",
         "ENVIRONMENT": "staging",
+        "SUPPORT_EMAIL": "support@aliahad.com",
+        "ACCESS_TEAM_DOMAIN": "https://aliahad.cloudflareaccess.com",
+        "ACCESS_AUD": "215462fb9b5d3d22cca3a080aae72e249a8304e5c45f9d0e8756cedced23134a",
         "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
         "LEGACY_AUTH_DEADLINE": "2026-08-11T19:00:00.000Z"
       },

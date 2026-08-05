@@ -43,6 +43,9 @@ class SyncCoordinator private constructor(context: Context) {
     private val syncMutex = Mutex()
 
     suspend fun ensureVault(): VaultSetupResult {
+        if (!account.cloudServicesAllowed) {
+            return VaultSetupResult.Error(restrictedMessage())
+        }
         val accountId = account.accountId ?: return VaultSetupResult.Error("Sign in before setting up encrypted sync.")
         val token = when (val auth = account.validAccessToken()) {
             is AccountResult.Success -> auth.value
@@ -75,6 +78,9 @@ class SyncCoordinator private constructor(context: Context) {
     }
 
     suspend fun importRecoveryKey(recoveryKey: String): VaultSetupResult {
+        if (!account.cloudServicesAllowed) {
+            return VaultSetupResult.Error(restrictedMessage())
+        }
         val accountId = account.accountId ?: return VaultSetupResult.Error("Sign in first.")
         val recoverySecret = VaultCrypto.decodeRecoveryKey(recoveryKey)
             ?: return VaultSetupResult.Error("That recovery key is invalid or mistyped.")
@@ -100,6 +106,9 @@ class SyncCoordinator private constructor(context: Context) {
     suspend fun syncNow(): SyncResult = syncMutex.withLock { syncLocked() }
 
     private suspend fun syncLocked(): SyncResult {
+        if (!account.cloudServicesAllowed) {
+            return SyncResult.Error(restrictedMessage(), false)
+        }
         val accountId = account.accountId ?: return SyncResult.Error("Sign in to synchronize.", false)
         when (val vault = ensureVault()) {
             VaultSetupResult.NeedsRecovery -> return SyncResult.NeedsRecovery
@@ -168,6 +177,9 @@ class SyncCoordinator private constructor(context: Context) {
             }
         }
     }
+
+    private fun restrictedMessage(): String = account.accountStatus.publicMessage
+        ?: "This account cannot use encrypted sync right now. Contact ${account.accountStatus.supportEmail} for help."
 
     private suspend fun stageLocal(accountId: String, vaultKey: ByteArray) {
         var remaining = MAX_BATCH - dao.outbox(accountId, MAX_BATCH).size

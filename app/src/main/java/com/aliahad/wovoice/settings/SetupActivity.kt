@@ -43,6 +43,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.aliahad.wovoice.R
 import com.aliahad.wovoice.account.AccountResult
+import com.aliahad.wovoice.account.AccountState
 import com.aliahad.wovoice.account.DeviceSession
 import com.aliahad.wovoice.account.SessionManager
 import com.aliahad.wovoice.dashboard.DictionaryAdapter
@@ -126,6 +127,11 @@ class SetupActivity : AppCompatActivity() {
     private var accountStatus: TextView? = null
     private var accountQuota: TextView? = null
     private var accountButton: Button? = null
+    private var accountSignInHelp: View? = null
+    private var accountRestrictionMessage: TextView? = null
+    private var accountRecoveryAction: View? = null
+    private var accountSignOutAction: View? = null
+    private var accountDeleteAction: View? = null
     private var pendingRecoveryKey: String? = null
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -379,12 +385,17 @@ class SetupActivity : AppCompatActivity() {
         val selected = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
             ?.startsWith(packageName) == true
         val online = hasValidatedNetwork()
-        val connected = account.signedIn
+        val connected = account.cloudServicesAllowed
+        val accountUnavailable = if (account.signedIn && account.accountStatus.state.restricted) {
+            "Account ${account.accountStatus.state.name.lowercase()} — manual keyboard still works"
+        } else {
+            "Sign in for voice input"
+        }
         readinessText.text = listOf(
             statusLine(mic, "Microphone ready", "Microphone permission needed"),
             statusLine(selected, "WoVoice selected", if (enabled) "Choose WoVoice as keyboard" else "Keyboard not enabled"),
             statusLine(online, "Network available", "Network unavailable — manual keyboard still works"),
-            statusLine(connected, "Account verified", "Sign in for voice input"),
+            statusLine(connected, "Account verified", accountUnavailable),
         ).joinToString("\n")
     }
 
@@ -544,24 +555,46 @@ class SetupActivity : AppCompatActivity() {
         accountStatus = statusText()
         accountQuota = statusText()
         accountButton = actionButton(if (account.signedIn) "Manage signed-in devices" else "Sign in or create account") {
-            if (account.signedIn) showSessions() else startAccountLogin()
+            when {
+                !account.signedIn -> startAccountLogin()
+                account.accountStatus.state.restricted -> showAccountRestriction()
+                else -> showSessions()
+            }
         }
+        accountSignInHelp = TextView(this).apply {
+            text = "Passwordless sign-in opens wovoice.aliahad.com. Your rotating session credential is protected by Android Keystore."
+            styleText(12.5f, MUTED)
+            setPadding(dp(2), dp(6), dp(2), dp(4))
+        }
+        accountRestrictionMessage = TextView(this).apply {
+            styleText(13f, ERROR)
+            setLineSpacing(dp(2).toFloat(), 1.12f)
+            setPadding(dp(2), dp(7), dp(2), dp(5))
+            visibility = View.GONE
+        }
+        accountRecoveryAction = settingAction(
+            "Recovery and encrypted sync",
+            "History, dictionary, and analytics are encrypted before upload",
+            "Manage",
+        ) { showRecoveryControls() }
+        accountSignOutAction = settingAction(
+            "Sign out",
+            "Manual keyboard remains available offline",
+            "Sign out",
+        ) { confirmSignOut() }
+        accountDeleteAction = destructiveAction(
+            "Delete WoVoice account",
+            "Fresh email verification permanently removes cloud account data",
+        ) { confirmAccountDeletion() }
         body.addView(settingsCard("ACCOUNT", listOf(
             accountStatus!!,
             accountQuota!!,
             accountButton!!,
-            TextView(this).apply {
-                text = "Passwordless sign-in opens wovoice.aliahad.com. Your rotating session credential is protected by Android Keystore."
-                styleText(12.5f, MUTED)
-                setPadding(dp(2), dp(6), dp(2), dp(4))
-            },
-            settingAction("Recovery and encrypted sync", "History, dictionary, and analytics are encrypted before upload", "Manage") {
-                showRecoveryControls()
-            },
-            settingAction("Sign out", "Manual keyboard remains available offline", "Sign out") { confirmSignOut() },
-            destructiveAction("Delete WoVoice account", "Fresh email verification permanently removes cloud account data") {
-                confirmAccountDeletion()
-            },
+            accountSignInHelp!!,
+            accountRestrictionMessage!!,
+            accountRecoveryAction!!,
+            accountSignOutAction!!,
+            accountDeleteAction!!,
         )))
 
         body.addView(settingsCard("VOICE & LANGUAGE", listOf(
@@ -624,12 +657,41 @@ class SetupActivity : AppCompatActivity() {
             else -> "WoVoice is not enabled yet"
         }
         keyboardStatus?.setTextColor(if (selected) SUCCESS else MUTED)
-        accountStatus?.text = if (account.signedIn) "✓ ${account.email ?: "Verified WoVoice account"}" else "Sign in to enable cloud speech"
-        accountStatus?.setTextColor(if (account.signedIn) SUCCESS else MUTED)
-        accountButton?.text = if (account.signedIn) "Manage signed-in devices" else "Sign in or create account"
-        accountQuota?.text = account.currentQuota?.let {
-            "${it.remainingAudioSeconds.roundToInt()} of ${it.limitAudioSeconds.roundToInt()} voice seconds remaining today"
-        } ?: if (account.signedIn) "Checking today’s free quota…" else "10 minutes of voice input per UTC day"
+        val signedIn = account.signedIn
+        val status = account.accountStatus
+        val restricted = signedIn && status.state.restricted
+        accountStatus?.text = when {
+            !signedIn -> "Sign in to enable cloud speech"
+            status.state == AccountState.SUSPENDED -> "Account suspended • ${account.email ?: "Verified account"}"
+            status.state == AccountState.BANNED -> "Account banned • ${account.email ?: "Verified account"}"
+            else -> "✓ ${account.email ?: "Verified WoVoice account"}"
+        }
+        accountStatus?.setTextColor(when {
+            restricted -> ERROR
+            signedIn -> SUCCESS
+            else -> MUTED
+        })
+        accountButton?.text = when {
+            !signedIn -> "Sign in or create account"
+            restricted -> "View account status"
+            else -> "Manage signed-in devices"
+        }
+        accountQuota?.text = if (restricted) {
+            "Voice input and encrypted sync are paused. Manual typing remains available offline."
+        } else if (signedIn) {
+            account.currentQuota?.let {
+                "${it.remainingAudioSeconds.roundToInt()} of ${it.limitAudioSeconds.roundToInt()} voice seconds remaining today"
+            } ?: "Checking today’s free quota…"
+        } else {
+            "10 minutes of voice input per UTC day"
+        }
+        accountQuota?.setTextColor(if (restricted) ERROR else MUTED)
+        accountRestrictionMessage?.text = if (restricted) restrictionSummary() else ""
+        accountRestrictionMessage?.visibility = if (restricted) View.VISIBLE else View.GONE
+        accountSignInHelp?.visibility = if (signedIn) View.GONE else View.VISIBLE
+        accountRecoveryAction?.visibility = if (signedIn && !restricted) View.VISIBLE else View.GONE
+        accountSignOutAction?.visibility = if (signedIn) View.VISIBLE else View.GONE
+        accountDeleteAction?.visibility = if (signedIn) View.VISIBLE else View.GONE
     }
 
     private fun startAccountLogin(intent: String = SessionManager.AUTH_LOGIN) {
@@ -693,6 +755,7 @@ class SetupActivity : AppCompatActivity() {
             }
             is AccountResult.Error -> Snackbar.make(contentHost, result.message, Snackbar.LENGTH_LONG).show()
         }
+        accountButton?.isEnabled = true
     }
 
     private fun handleLocalDataAfterLogin(accountId: String, previousAccountId: String?) {
@@ -741,7 +804,8 @@ class SetupActivity : AppCompatActivity() {
             when (val result = withContext(Dispatchers.IO) { account.loadProfile() }) {
                 is AccountResult.Success -> {
                     updateSetupStatus()
-                    runEncryptedSync(showResult = false)
+                    showPolicyUpdateNoticeIfNeeded()
+                    if (account.cloudServicesAllowed) runEncryptedSync(showResult = false)
                 }
                 is AccountResult.Error -> {
                     updateSetupStatus()
@@ -758,6 +822,10 @@ class SetupActivity : AppCompatActivity() {
     }
 
     private fun showSessions() {
+        if (!account.cloudServicesAllowed) {
+            showAccountRestriction()
+            return
+        }
         scope.launch {
             when (val result = withContext(Dispatchers.IO) { account.listSessions() }) {
                 is AccountResult.Success -> showSessionList(result.value)
@@ -838,6 +906,10 @@ class SetupActivity : AppCompatActivity() {
     private fun showRecoveryControls() {
         if (!account.signedIn) {
             Snackbar.make(contentHost, "Sign in before setting up encrypted sync.", Snackbar.LENGTH_LONG).show()
+            return
+        }
+        if (!account.cloudServicesAllowed) {
+            showAccountRestriction()
             return
         }
         val configured = sync.recoveryKey() != null
@@ -993,7 +1065,7 @@ class SetupActivity : AppCompatActivity() {
     }
 
     private fun runEncryptedSync(showResult: Boolean) {
-        if (!store.vaultRecoveryAcknowledged || !account.signedIn) return
+        if (!store.vaultRecoveryAcknowledged || !account.cloudServicesAllowed) return
         scope.launch {
             when (val result = withContext(Dispatchers.IO) { sync.syncNow() }) {
                 is SyncResult.Success -> if (showResult) {
@@ -1008,6 +1080,51 @@ class SetupActivity : AppCompatActivity() {
             }
             refreshHome(); refreshHistory(); refreshDictionary()
         }
+    }
+
+    private fun showAccountRestriction() {
+        val status = account.accountStatus
+        val title = if (status.state == AccountState.BANNED) "Account banned" else "Account suspended"
+        MaterialAlertDialogBuilder(this)
+            .setTitle(title)
+            .setMessage(restrictionSummary())
+            .setNegativeButton("Close", null)
+            .setPositiveButton("Contact support") { _, _ ->
+                startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${status.supportEmail}")))
+            }
+            .show()
+    }
+
+    private fun restrictionSummary(): String {
+        val status = account.accountStatus
+        val until = status.suspendedUntilMs?.let {
+            Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault())
+                .format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM))
+        }
+        return buildString {
+            append(status.publicMessage ?: "This account cannot use WoVoice cloud services right now.")
+            if (until != null) append("\n\nSuspended until $until.")
+            append("\n\nManual typing and local data remain available. For help, contact ${status.supportEmail}.")
+        }
+    }
+
+    private fun showPolicyUpdateNoticeIfNeeded() {
+        if (store.acknowledgedPolicyVersion == POLICY_VERSION) return
+        store.acknowledgedPolicyVersion = POLICY_VERSION
+        Snackbar.make(
+            contentHost,
+            "WoVoice’s Privacy Policy and Terms now explain account moderation and operational-data retention.",
+            Snackbar.LENGTH_LONG,
+        ).setAction("Review") { openServicePage("/privacy") }.show()
+    }
+
+    private fun openServicePage(path: String) {
+        val url = "${store.workerUrl.trimEnd('/')}${if (path.startsWith('/')) path else "/$path"}"
+        CustomTabsIntent.Builder()
+            .setShowTitle(true)
+            .setShareState(CustomTabsIntent.SHARE_STATE_OFF)
+            .build()
+            .launchUrl(this, Uri.parse(url))
     }
 
     private fun hasValidatedNetwork(): Boolean {
@@ -1417,6 +1534,7 @@ class SetupActivity : AppCompatActivity() {
         const val TAB_SETTINGS = 1_104
         const val STATE_TAB = "dashboard_tab"
         const val STATE_PERIOD = "analytics_period"
+        const val POLICY_VERSION = "2026-08-05-admin-v1"
         val BACKGROUND = Color.rgb(23, 22, 27)
         val NAVIGATION = Color.rgb(29, 28, 34)
         val CARD = Color.rgb(36, 35, 41)

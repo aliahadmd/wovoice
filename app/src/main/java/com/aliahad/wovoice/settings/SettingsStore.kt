@@ -77,6 +77,35 @@ class SettingsStore(context: Context) {
         get() = preferences.getString(KEY_ACCOUNT_EMAIL, null)
         set(value) = preferences.edit().putString(KEY_ACCOUNT_EMAIL, value).apply()
 
+    var accountRole: String
+        get() = preferences.getString(KEY_ACCOUNT_ROLE, "user") ?: "user"
+        set(value) = preferences.edit().putString(KEY_ACCOUNT_ROLE, value).apply()
+
+    var accountState: String
+        get() = preferences.getString(KEY_ACCOUNT_STATE, "active") ?: "active"
+        set(value) = preferences.edit().putString(KEY_ACCOUNT_STATE, value).apply()
+
+    var accountSuspendedUntilMs: Long?
+        get() = preferences.getLong(KEY_ACCOUNT_SUSPENDED_UNTIL, 0L).takeIf { it > 0L }
+        set(value) {
+            val editor = preferences.edit()
+            if (value == null) editor.remove(KEY_ACCOUNT_SUSPENDED_UNTIL)
+            else editor.putLong(KEY_ACCOUNT_SUSPENDED_UNTIL, value)
+            editor.apply()
+        }
+
+    var accountPublicMessage: String?
+        get() = preferences.getString(KEY_ACCOUNT_PUBLIC_MESSAGE, null)
+        set(value) = preferences.edit().putString(KEY_ACCOUNT_PUBLIC_MESSAGE, value).apply()
+
+    var accountSupportEmail: String
+        get() = preferences.getString(KEY_ACCOUNT_SUPPORT_EMAIL, "support@aliahad.com") ?: "support@aliahad.com"
+        set(value) = preferences.edit().putString(KEY_ACCOUNT_SUPPORT_EMAIL, value).apply()
+
+    var acknowledgedPolicyVersion: String?
+        get() = preferences.getString(KEY_ACKNOWLEDGED_POLICY_VERSION, null)
+        set(value) = preferences.edit().putString(KEY_ACKNOWLEDGED_POLICY_VERSION, value).apply()
+
     var syncCursor: Long
         get() = preferences.getLong(KEY_SYNC_CURSOR, 0L)
         set(value) = preferences.edit().putLong(KEY_SYNC_CURSOR, value.coerceAtLeast(0L)).apply()
@@ -93,6 +122,11 @@ class SettingsStore(context: Context) {
         preferences.edit()
             .remove(KEY_ACCOUNT_ID)
             .remove(KEY_ACCOUNT_EMAIL)
+            .remove(KEY_ACCOUNT_ROLE)
+            .remove(KEY_ACCOUNT_STATE)
+            .remove(KEY_ACCOUNT_SUSPENDED_UNTIL)
+            .remove(KEY_ACCOUNT_PUBLIC_MESSAGE)
+            .remove(KEY_ACCOUNT_SUPPORT_EMAIL)
             .remove(KEY_SYNC_CURSOR)
             .remove(KEY_VAULT_RECOVERY_ACKNOWLEDGED)
             .apply()
@@ -118,6 +152,12 @@ class SettingsStore(context: Context) {
         const val KEY_WAVEFORM = "waveform_enabled"
         const val KEY_ACCOUNT_ID = "account_id"
         const val KEY_ACCOUNT_EMAIL = "account_email"
+        const val KEY_ACCOUNT_ROLE = "account_role"
+        const val KEY_ACCOUNT_STATE = "account_state"
+        const val KEY_ACCOUNT_SUSPENDED_UNTIL = "account_suspended_until"
+        const val KEY_ACCOUNT_PUBLIC_MESSAGE = "account_public_message"
+        const val KEY_ACCOUNT_SUPPORT_EMAIL = "account_support_email"
+        const val KEY_ACKNOWLEDGED_POLICY_VERSION = "acknowledged_policy_version"
         const val KEY_LAST_ACCOUNT_ID = "last_account_id"
         const val KEY_LEGACY_CREDENTIAL_REMOVED = "legacy_credential_removed"
         const val KEY_SYNC_CURSOR = "sync_cursor"

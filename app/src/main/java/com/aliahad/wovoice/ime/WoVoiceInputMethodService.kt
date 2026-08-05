@@ -161,6 +161,13 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
             showError("Sign in to WoVoice to use voice input.")
             return
         }
+        if (!account.cloudServicesAllowed) {
+            showError(
+                account.accountStatus.publicMessage
+                    ?: "This account cannot use voice input right now. Manual typing remains available.",
+            )
+            return
+        }
         cancelActiveWork(resetState = false)
         captureSession = currentSession
         sentenceStartForCapture = TextCommitPolicy.isSentenceStart(previousCharacter())
@@ -312,8 +319,30 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
                 }
                 if (!sessions.isActive(session) || session != currentSession || !isInputViewShown) return@launch
                 when (result) {
-                    is TranscriptionClient.Result.Success -> commitFinalText(result, audioDurationMs)
-                    is TranscriptionClient.Result.Error -> showError(result.message)
+                    is TranscriptionClient.Result.Success -> {
+                        val profile = withContext(Dispatchers.IO) { account.loadProfile() }
+                        if (!sessions.isActive(session) || session != currentSession || !isInputViewShown) return@launch
+                        when {
+                            profile !is AccountResult.Success -> showError(
+                                "WoVoice could not confirm your account status. The text was not inserted; tap to try again.",
+                            )
+                            account.cloudServicesAllowed -> commitFinalText(result, audioDurationMs)
+                            else -> showError(
+                                account.accountStatus.publicMessage
+                                    ?: "This account cannot insert cloud speech right now.",
+                            )
+                        }
+                    }
+                    is TranscriptionClient.Result.Error -> {
+                        if (result.code == "ACCOUNT_SUSPENDED" || result.code == "ACCOUNT_BANNED") {
+                            account.markRestricted(result.code, result.message)
+                        }
+                        showError(
+                            account.accountStatus.publicMessage?.takeIf {
+                                result.code == "ACCOUNT_SUSPENDED" || result.code == "ACCOUNT_BANNED"
+                            } ?: result.message,
+                        )
+                    }
                 }
             } finally {
                 file.delete()
@@ -334,7 +363,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
                     audioDurationMs = audioDurationMs,
                     keepHistory = settings.historyEnabled,
                 )
-                if (settings.vaultRecoveryAcknowledged) {
+                if (settings.vaultRecoveryAcknowledged && account.cloudServicesAllowed) {
                     SyncCoordinator.get(this@WoVoiceInputMethodService).syncNow()
                 }
             }
