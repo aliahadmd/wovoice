@@ -26,3 +26,6 @@ build/
 /.v2c
 /.video_agent
 /.zcode
+/desktop/node_modules
+/desktop/out
+/desktop/dist
