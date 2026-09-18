@@ -34,6 +34,7 @@ class WoVoiceKeyboardView(context: Context) : SwipeFrameLayout(context) {
         fun onCancelVoice()
         fun onSelectManual(manual: Boolean)
         fun onCommitText(text: String)
+        fun onEmojiUsed(emoji: String)
         fun onDelete()
         fun onEditorAction()
         fun onOpenSettings()
@@ -57,6 +58,8 @@ class WoVoiceKeyboardView(context: Context) : SwipeFrameLayout(context) {
     private var state: KeyboardState = KeyboardState.VoiceIdle
     private var voiceEnabled = true
     private var symbolPage = 0
+    private var emojiPanel: EmojiPanelView? = null
+    private var emojiRecents: List<String> = emptyList()
     private var actionLabel = "↵"
     private var modeSlideDirection = 1
     private var initialRender = true
@@ -208,6 +211,11 @@ class WoVoiceKeyboardView(context: Context) : SwipeFrameLayout(context) {
         hapticsEnabled = haptics
         animationsEnabled = animations
         waveformEnabled = waveform
+    }
+
+    fun setEmojiRecents(values: List<String>) {
+        emojiRecents = values
+        emojiPanel?.setRecents(values)
     }
 
     fun setVoiceEnabled(enabled: Boolean) {
@@ -409,38 +417,28 @@ class WoVoiceKeyboardView(context: Context) : SwipeFrameLayout(context) {
 
     private fun rebuildManualKeyboard(animate: Boolean = manualBody.isShown && animationsEnabled, direction: Int = 0) {
         manualBody.removeAllViews()
-        val rows: List<List<KeySpec>> = when (symbolPage) {
-            1 -> symbolRowsOne()
-            2 -> symbolRowsTwo()
-            else -> letterRows()
-        }
-        rows.forEach { specs ->
-            val row = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER
-                setPadding(context.dp(3), context.dp(2), context.dp(3), context.dp(2))
-            }
+        if (symbolPage == SYMBOL_PAGE_EMOJI) {
+            emojiPanel = ensureEmojiPanel()
+            manualBody.addView(
+                emojiPanel,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 3f),
+            )
+            val row = buildKeySpecRow(
+                listOf(
+                    KeySpec("⌫", DELETE, 1f),
+                    KeySpec("ABC", LETTERS, 1.4f),
+                    KeySpec("English", " ", 2.4f),
+                    KeySpec(actionLabel, ENTER, 1.55f),
+                ),
+            )
             manualBody.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-            specs.forEach { spec ->
-                val key = TextView(context).apply {
-                    text = spec.label
-                    styleText(keyTextSize(spec))
-                    gravity = Gravity.CENTER
-                    background = rounded(keyColor(spec), context.dp(10).toFloat())
-                    when {
-                        spec.action == ENTER -> setTextColor(Color.rgb(30, 30, 33))
-                        spec.action == SHIFT && shiftState.shifted -> setTextColor(Color.rgb(30, 30, 33))
-                        spec.action == " " -> setTextColor(MUTED)
-                    }
-                    setPadding(context.dp(2), 0, context.dp(2), 0)
-                    contentDescription = keyDescription(spec)
-                }
-                val params = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, spec.weight).apply {
-                    leftMargin = context.dp(3); rightMargin = context.dp(3); topMargin = context.dp(2); bottomMargin = context.dp(2)
-                }
-                row.addView(key, params)
-                if (spec.action == DELETE) installDeleteTouch(key) else installKeyTouch(key) { performKey(spec) }
+        } else {
+            val rows: List<List<KeySpec>> = when (symbolPage) {
+                1 -> symbolRowsOne()
+                2 -> symbolRowsTwo()
+                else -> letterRows()
             }
+            rows.forEach { specs -> manualBody.addView(buildKeySpecRow(specs), rowParams()) }
         }
         if (animate) {
             manualBody.animate().cancel()
@@ -453,6 +451,38 @@ class WoVoiceKeyboardView(context: Context) : SwipeFrameLayout(context) {
                 .setInterpolator(motionInterpolator)
                 .start()
         }
+    }
+
+    private fun rowParams(): LinearLayout.LayoutParams =
+        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+
+    private fun buildKeySpecRow(specs: List<KeySpec>): LinearLayout {
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(context.dp(3), context.dp(2), context.dp(3), context.dp(2))
+        }
+        specs.forEach { spec ->
+            val key = TextView(context).apply {
+                text = spec.label
+                styleText(keyTextSize(spec))
+                gravity = Gravity.CENTER
+                background = rounded(keyColor(spec), context.dp(10).toFloat())
+                when {
+                    spec.action == ENTER -> setTextColor(Color.rgb(30, 30, 33))
+                    spec.action == SHIFT && shiftState.shifted -> setTextColor(Color.rgb(30, 30, 33))
+                    spec.action == " " -> setTextColor(MUTED)
+                }
+                setPadding(context.dp(2), 0, context.dp(2), 0)
+                contentDescription = keyDescription(spec)
+            }
+            val params = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, spec.weight).apply {
+                leftMargin = context.dp(3); rightMargin = context.dp(3); topMargin = context.dp(2); bottomMargin = context.dp(2)
+            }
+            row.addView(key, params)
+            if (spec.action == DELETE) installDeleteTouch(key) else installKeyTouch(key) { performKey(spec) }
+        }
+        return row
     }
 
     private fun performKey(spec: KeySpec) {
@@ -472,6 +502,10 @@ class WoVoiceKeyboardView(context: Context) : SwipeFrameLayout(context) {
             SYMBOL_PAGE -> {
                 symbolPage = if (symbolPage == 1) 2 else 1
                 rebuildManualKeyboard(animate = true, direction = if (symbolPage == 2) 1 else -1)
+            }
+            EMOJI -> {
+                symbolPage = SYMBOL_PAGE_EMOJI
+                rebuildManualKeyboard(animate = true, direction = 1)
             }
             ENTER -> listener.onEditorAction()
             else -> {
@@ -494,8 +528,9 @@ class WoVoiceKeyboardView(context: Context) : SwipeFrameLayout(context) {
             letters("ASDFGHJKL"),
             listOf(KeySpec(if (shiftState.capsLocked) "⇪" else "⇧", SHIFT, 1.25f)) + letters("ZXCVBNM") + KeySpec("⌫", DELETE, 1.25f),
             listOf(
-                KeySpec("123", SYMBOLS, 1.55f),
-                KeySpec("English", " ", 3f),
+                KeySpec("123", SYMBOLS, 1.4f),
+                KeySpec("🙂", EMOJI, 1.05f),
+                KeySpec("English", " ", 2.5f),
                 KeySpec(actionLabel, ENTER, 1.55f),
             ),
         )
@@ -505,18 +540,29 @@ class WoVoiceKeyboardView(context: Context) : SwipeFrameLayout(context) {
         "1234567890".map { KeySpec(it.toString(), it.toString()) },
         listOf("@", "#", "\$", "%", "&", "-", "+", "(", ")").map { KeySpec(it, it) },
         listOf(KeySpec("#+=", SYMBOL_PAGE, 1.25f)) + listOf("*", "\"", "'", ",", ".", "!", "?").map { KeySpec(it, it) } + KeySpec("⌫", DELETE, 1.25f),
-        listOf(KeySpec("ABC", LETTERS, 1.55f), KeySpec("English", " ", 3f), KeySpec(actionLabel, ENTER, 1.55f)),
+        listOf(
+            KeySpec("ABC", LETTERS, 1.4f),
+            KeySpec("🙂", EMOJI, 1.05f),
+            KeySpec("English", " ", 2.5f),
+            KeySpec(actionLabel, ENTER, 1.55f),
+        ),
     )
 
     private fun symbolRowsTwo() = listOf(
         listOf("[", "]", "{", "}", "#", "%", "^", "*", "+", "=").map { KeySpec(it, it) },
         listOf("_", "\\", "|", "~", "<", ">", "€", "£", "¥").map { KeySpec(it, it) },
         listOf(KeySpec("123", SYMBOL_PAGE, 1.25f)) + listOf("•", "`", ":", ";", "©", "✓", "÷").map { KeySpec(it, it) } + KeySpec("⌫", DELETE, 1.25f),
-        listOf(KeySpec("ABC", LETTERS, 1.55f), KeySpec("English", " ", 3f), KeySpec(actionLabel, ENTER, 1.55f)),
+        listOf(
+            KeySpec("ABC", LETTERS, 1.4f),
+            KeySpec("🙂", EMOJI, 1.05f),
+            KeySpec("English", " ", 2.5f),
+            KeySpec(actionLabel, ENTER, 1.55f),
+        ),
     )
 
     private fun keyTextSize(spec: KeySpec): Float = when {
         spec.action == " " -> 13f
+        spec.action == EMOJI -> 19f
         spec.label.length >= 4 -> 15f
         spec.label.length == 3 -> 18f
         else -> 21f
@@ -534,9 +580,30 @@ class WoVoiceKeyboardView(context: Context) : SwipeFrameLayout(context) {
         SYMBOLS -> "Numbers and symbols"
         LETTERS -> "Letters"
         SYMBOL_PAGE -> "More symbols"
+        EMOJI -> "Emoji page"
         ENTER -> actionLabel
         " " -> "Space"
         else -> spec.label
+    }
+
+    private fun ensureEmojiPanel(): EmojiPanelView {
+        val existing = emojiPanel
+        if (existing != null) return existing
+        val panel = EmojiPanelView(context).apply {
+            setRecents(emojiRecents)
+            // Index 0 resolves to Recents when history exists, otherwise Smileys.
+            selectCategory(0)
+            onEmojiSelected = { emoji -> handleEmojiSelected(emoji) }
+        }
+        emojiPanel = panel
+        return panel
+    }
+
+    private fun handleEmojiSelected(emoji: String) {
+        listener.onCommitText(emoji)
+        emojiRecents = EmojiRecents.updated(emojiRecents, emoji)
+        emojiPanel?.setRecents(emojiRecents)
+        listener.onEmojiUsed(emoji)
     }
 
     private fun installKeyTouch(view: View, action: () -> Unit) {
@@ -687,6 +754,8 @@ class WoVoiceKeyboardView(context: Context) : SwipeFrameLayout(context) {
         const val SYMBOLS = "__symbols"
         const val LETTERS = "__letters"
         const val SYMBOL_PAGE = "__symbol_page"
+        const val EMOJI = "__emoji"
         const val ENTER = "__enter"
+        const val SYMBOL_PAGE_EMOJI = 3
     }
 }

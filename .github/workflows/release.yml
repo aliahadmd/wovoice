@@ -1,12 +1,7 @@
 name: Publish Android release
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: Version to publish
-        required: true
-        default: "1.5.0"
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -29,7 +24,8 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          # Matches the daemon JVM pinned in gradle/gradle-daemon-jvm.properties.
+          java-version: "21"
           cache: gradle
       - uses: gradle/actions/setup-gradle@v4
       - uses: actions/setup-node@v4
@@ -38,14 +34,16 @@ jobs:
           cache: npm
           cache-dependency-path: worker/package-lock.json
 
-      - name: Validate requested version
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
+      # The single source of truth for a release version is app/build.gradle.kts.
+      - name: Resolve release version
         run: |
           set -euo pipefail
-          test "$RELEASE_VERSION" = "1.5.0"
-          grep -q 'versionName = "1.5.0"' app/build.gradle.kts
-          grep -q 'versionCode = 6' app/build.gradle.kts
+          VERSION=$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)"$/\1/p' app/build.gradle.kts)
+          CODE=$(sed -nE 's/^[[:space:]]*versionCode = ([0-9]+)$/\1/p' app/build.gradle.kts)
+          test -n "$VERSION"
+          test -n "$CODE"
+          echo "RELEASE_VERSION=$VERSION" >> "$GITHUB_ENV"
+          printf 'Publishing WoVoice %s (versionCode %s)\n' "$VERSION" "$CODE"
 
       - name: Test Worker and admin portal
         working-directory: worker
@@ -70,7 +68,6 @@ jobs:
       - name: Verify and package APK
         env:
           EXPECTED_CERT: ${{ vars.WOVOICE_SIGNING_CERT_SHA256 }}
-          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           APK=app/build/outputs/apk/release/app-release.apk
@@ -97,19 +94,15 @@ jobs:
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           if gh release view "v$RELEASE_VERSION" >/dev/null 2>&1; then
             echo "Release v$RELEASE_VERSION already exists." >&2
             exit 1
           fi
-          if gh release view v1.4.0 >/dev/null 2>&1; then
-            gh release delete v1.4.0 --yes
-          fi
           gh release create "v$RELEASE_VERSION" \
             "release/WoVoice-$RELEASE_VERSION.apk" \
             "release/WoVoice-$RELEASE_VERSION.apk.sha256" \
             --target "$GITHUB_SHA" \
-            --title "WoVoice $RELEASE_VERSION — Dedicated Admin Portal" \
-            --notes "WoVoice $RELEASE_VERSION replaces Cloudflare Access with a first-party email-verified admin portal, keeps the speech-first Android keyboard private by design, and introduces a new public release signing identity. Existing v1.3 installations require uninstalling before installing this release."
+            --title "WoVoice $RELEASE_VERSION" \
+            --notes "WoVoice $RELEASE_VERSION release. See the repository README and CHANGELOG for what is new in this version."

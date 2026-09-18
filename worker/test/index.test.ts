@@ -16,7 +16,6 @@ declare global {
   }
 }
 
-const LEGACY_TOKEN = "test-device-token-with-enough-entropy";
 const PII_KEY = base64Url(new Uint8Array(32).fill(7));
 
 beforeEach(async () => {
@@ -86,39 +85,12 @@ describe("WoVoice Worker", () => {
     });
   });
 
-  it("supports the old production token only during the migration window", async () => {
-    const response = await createHandler(fakeServices())(
-      new Request("https://wovoice-transcription.aliahad.workers.dev/v1/health", {
-        headers: { authorization: `Bearer ${LEGACY_TOKEN}` },
-      }),
-      fakeEnv(),
-    );
-    expect(response.status).toBe(200);
-    expect((await response.json()) as object).toMatchObject({ ok: true });
-  });
-
-  it("requires an upgrade after the legacy migration deadline", async () => {
-    const environment = fakeEnv();
-    environment.LEGACY_AUTH_DEADLINE = "2000-01-01T00:00:00.000Z";
-    const response = await createHandler(fakeServices())(
-      new Request("https://wovoice-transcription.aliahad.workers.dev/v1/health", {
-        headers: { authorization: `Bearer ${LEGACY_TOKEN}` },
-      }),
-      environment,
-    );
-    expect(response.status).toBe(426);
-    expect((await response.json()) as object).toMatchObject({
-      error: { code: "UPGRADE_REQUIRED", retryable: false },
-    });
-  });
-
   it("enforces the transcription burst limiter", async () => {
-    const environment = fakeEnv(false);
-    const response = await createHandler(fakeServices())(
-      new Request("https://wovoice-transcription.aliahad.workers.dev/v1/health", {
-        headers: { authorization: `Bearer ${LEGACY_TOKEN}` },
-      }),
-      environment,
+    const fixture = authFixture();
+    const signedIn = await registerAndSignIn("limited@example.com", fixture);
+    const response = await fixture.handler(
+      new Request("https://worker.test/v1/health", { headers: bearer(signedIn.accessToken) }),
+      fakeEnv(false),
     );
     expect(response.status).toBe(429);
     expect((await response.json()) as object).toMatchObject({
@@ -126,9 +98,14 @@ describe("WoVoice Worker", () => {
     });
   });
 
-  it("validates and returns a polished legacy transcription", async () => {
+  it("validates and returns a polished transcription", async () => {
     const services = fakeServices("hello how are you", "Hello, how are you?");
-    const response = await createHandler(services)(legacyTranscriptionRequest(makeWav(1)), fakeEnv());
+    const fixture = authFixture(services);
+    const signedIn = await registerAndSignIn("polish@example.com", fixture);
+    const response = await fixture.handler(
+      transcriptionRequest(makeWav(1), signedIn.accessToken),
+      fixture.environment,
+    );
     expect(response.status).toBe(200);
     expect((await response.json()) as object).toMatchObject({
       text: "Hello, how are you?",
@@ -147,16 +124,23 @@ describe("WoVoice Worker", () => {
 
   it("falls back to raw ASR when cleanup changes a number", async () => {
     const services = fakeServices("Meet me at 14:30", "Meet me at 4:30.");
-    const response = await createHandler(services)(legacyTranscriptionRequest(makeWav(1)), fakeEnv());
+    const fixture = authFixture(services);
+    const signedIn = await registerAndSignIn("numbers@example.com", fixture);
+    const response = await fixture.handler(
+      transcriptionRequest(makeWav(1), signedIn.accessToken),
+      fixture.environment,
+    );
     expect(response.status).toBe(200);
     expect((await response.json()) as object).toMatchObject({ text: "Meet me at 14:30", polished: false });
   });
 
   it("rejects malformed WAV input without calling inference", async () => {
     const services = fakeServices();
-    const response = await createHandler(services)(
-      legacyTranscriptionRequest(new Uint8Array(64).buffer),
-      fakeEnv(),
+    const fixture = authFixture(services);
+    const signedIn = await registerAndSignIn("wav@example.com", fixture);
+    const response = await fixture.handler(
+      transcriptionRequest(new Uint8Array(64).buffer, signedIn.accessToken),
+      fixture.environment,
     );
     expect(response.status).toBe(400);
     expect(services.transcribe).not.toHaveBeenCalled();
@@ -531,7 +515,7 @@ describe("usage estimates", () => {
   });
 });
 
-function authFixture() {
+function authFixture(services: Services = fakeServices()) {
   const sent: Array<{ email: string; code: string }> = [];
   const authServices: AuthServices = {
     verifyTurnstile: vi.fn(async () => true),
@@ -541,7 +525,7 @@ function authFixture() {
   return {
     sent,
     environment,
-    handler: createHandler(fakeServices(), authServices),
+    handler: createHandler(services, authServices),
   };
 }
 
@@ -661,11 +645,9 @@ function fakeEnv(rateSuccess = true): AppEnv {
     APP_ORIGIN: "https://worker.test",
     ENVIRONMENT: "test",
     TURNSTILE_SITE_KEY: "test-site-key",
-    LEGACY_AUTH_DEADLINE: "2099-01-01T00:00:00.000Z",
     AUTH_MASTER_KEY: "test-auth-master-key-with-enough-entropy",
     PII_KEY,
     TURNSTILE_SECRET: "test-secret",
-    CLIENT_TOKEN: LEGACY_TOKEN,
   };
 }
 
@@ -714,10 +696,6 @@ function adminAuthRequest(path: string, body: unknown): Request {
     },
     body: JSON.stringify(body),
   });
-}
-
-function legacyTranscriptionRequest(audio: ArrayBuffer): Request {
-  return transcriptionRequest(audio, LEGACY_TOKEN, "https://wovoice-transcription.aliahad.workers.dev");
 }
 
 function transcriptionRequest(audio: ArrayBuffer, token: string, origin = "https://worker.test"): Request {

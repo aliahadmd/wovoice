@@ -15,6 +15,7 @@ import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.Editable
@@ -133,10 +134,16 @@ class SetupActivity : AppCompatActivity() {
     private var accountSignOutAction: View? = null
     private var accountDeleteAction: View? = null
     private var pendingRecoveryKey: String? = null
+    private var notificationPermissionRequested = false
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
         updateSetupStatus()
         refreshHome()
+        maybeRequestNotificationPermission()
+    }
+
+    private val notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        updateSetupStatus()
     }
 
     private val cameraPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
@@ -158,7 +165,7 @@ class SetupActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = SettingsStore(this)
-        account = SessionManager.get(this)
+        account = SessionManager.get(store, SecretStore(this), { store.workerUrl }, ::androidDeviceName)
         sync = SyncCoordinator.get(this)
         repository = WoVoiceRepository(this)
         activeTab = savedInstanceState?.getInt(STATE_TAB, TAB_HOME) ?: TAB_HOME
@@ -646,6 +653,7 @@ class SetupActivity : AppCompatActivity() {
 
     private fun updateSetupStatus() {
         val micGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        if (micGranted) maybeRequestNotificationPermission()
         microphoneStatus?.text = if (micGranted) "✓ Allowed and ready" else "Permission required for speech input"
         microphoneStatus?.setTextColor(if (micGranted) SUCCESS else MUTED)
         val manager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
@@ -987,8 +995,7 @@ class SetupActivity : AppCompatActivity() {
             .setMessage("Store this key privately. WoVoice and Cloudflare cannot restore encrypted data without it.")
             .setView(content)
             .setNegativeButton("Copy") { _, _ ->
-                (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-                    .setPrimaryClip(ClipData.newPlainText("WoVoice recovery key", key))
+                setClipboard("WoVoice recovery key", key)
             }
             .setPositiveButton("I saved it") { _, _ ->
                 store.vaultRecoveryAcknowledged = true
@@ -1135,6 +1142,16 @@ class SetupActivity : AppCompatActivity() {
             capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
+    // Android 13+ silently drops the "WoVoice is listening" foreground notification
+    // unless POST_NOTIFICATIONS was granted, so ask once the microphone is usable.
+    private fun maybeRequestNotificationPermission() {
+        if (notificationPermissionRequested) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        notificationPermissionRequested = true
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
     private fun showTermDialog(entry: DictionaryEntry? = null) {
         val field = input("Name or specialist term", InputType.TYPE_CLASS_TEXT).apply {
             setText(entry?.term.orEmpty())
@@ -1196,9 +1213,20 @@ class SetupActivity : AppCompatActivity() {
     }
 
     private fun copyRecord(record: DictationRecord) {
-        (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-            .setPrimaryClip(ClipData.newPlainText("WoVoice dictation", record.finalText))
+        setClipboard("WoVoice dictation", record.finalText)
         Snackbar.make(contentHost, "Copied to clipboard.", Snackbar.LENGTH_SHORT).show()
+    }
+
+    // Dictated text and recovery keys are private; flag them so clipboard viewers
+    // and synced clipboards on API 33+ exclude the content from previews.
+    private fun setClipboard(label: String, value: String) {
+        val clip = ClipData.newPlainText(label, value)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            clip.description.extras = android.os.PersistableBundle().apply {
+                putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
+            }
+        }
+        (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(clip)
     }
 
     private fun deleteHistoryWithUndo(record: DictationRecord) {

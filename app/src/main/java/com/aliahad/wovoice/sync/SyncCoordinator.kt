@@ -14,6 +14,7 @@ import com.aliahad.wovoice.data.SYNC_QUEUED
 import com.aliahad.wovoice.data.WoVoiceDatabase
 import com.aliahad.wovoice.settings.SecretStore
 import com.aliahad.wovoice.settings.SettingsStore
+import com.aliahad.wovoice.settings.androidDeviceName
 import org.json.JSONObject
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -37,8 +38,8 @@ class SyncCoordinator private constructor(context: Context) {
     private val appContext = context.applicationContext
     private val settings = SettingsStore(appContext)
     private val secrets = SecretStore(appContext)
-    private val account = SessionManager.get(appContext)
-    private val client = SyncClient(settings.workerUrl)
+    private val account = SessionManager.get(settings, secrets, { settings.workerUrl }, ::androidDeviceName)
+    private val client = SyncClient { settings.workerUrl }
     private val dao = WoVoiceDatabase.get(appContext).dao()
     private val syncMutex = Mutex()
 
@@ -168,9 +169,19 @@ class SyncCoordinator private constructor(context: Context) {
             is AccountResult.Error -> {
                 if (pushed.code == "SYNC_CONFLICT") {
                     val conflicts = client.conflicts(pushed)
+                    val localWrites = pending.associateBy { "${it.recordType}:${it.recordId}" }
                     conflicts.forEach { conflict ->
                         dao.deleteOutboxRecord(accountId, conflict.type, conflict.id)
-                        applyRemote(accountId, vaultKey, conflict, force = true)
+                        val localWrite = localWrites["${conflict.type}:${conflict.id}"]
+                        if (localWrite != null && !localWrite.deleted && conflict.deleted) {
+                            // A local write (typically an undo of a delete) raced a remote
+                            // tombstone. Keep the local record and restage it on top of the
+                            // server version so the next sync re-pushes it instead of the
+                            // server-wins force-apply silently deleting it again.
+                            restageConflictedLocal(accountId, vaultKey, conflict)
+                        } else {
+                            applyRemote(accountId, vaultKey, conflict, force = true)
+                        }
                     }
                     SyncResult.Error("Encrypted changes were reconciled with another device. Sync again to continue.", true)
                 } else SyncResult.Error(pushed.message, pushed.retryable)
@@ -262,43 +273,65 @@ class SyncCoordinator private constructor(context: Context) {
         ) ?: return false
         val json = runCatching { JSONObject(plaintext.toString(Charsets.UTF_8)) }.getOrNull() ?: return false
         return when (item.type) {
-            "history" -> applyHistory(accountId, item, json)
+            "history" -> applyHistory(accountId, item, json, force)
             "dictionary" -> applyDictionary(accountId, item, json, force)
-            "analytics" -> applyAnalytics(accountId, item, json)
+            "analytics" -> applyAnalytics(accountId, item, json, force)
             else -> false
         }
     }
 
-    private suspend fun applyHistory(accountId: String, remote: RemoteSyncItem, json: JSONObject): Boolean {
+    private suspend fun restageConflictedLocal(accountId: String, vaultKey: ByteArray, conflict: RemoteSyncItem) {
+        when (conflict.type) {
+            "history" -> dao.historyBySyncId(accountId, conflict.id)?.let { value ->
+                dao.updateRecord(value.copy(syncVersion = conflict.version, syncState = SYNC_QUEUED))
+                stage(accountId, vaultKey, "history", conflict.id, conflict.version, historyJson(value))
+            }
+            "dictionary" -> dao.dictionaryBySyncId(accountId, conflict.id)?.let { value ->
+                dao.updateDictionary(value.copy(syncVersion = conflict.version, syncState = SYNC_QUEUED))
+                stage(accountId, vaultKey, "dictionary", conflict.id, conflict.version, dictionaryJson(value))
+            }
+            "analytics" -> dao.analyticsBySyncId(accountId, conflict.id)?.let { value ->
+                dao.updateAnalyticsEvent(value.copy(syncVersion = conflict.version, syncState = SYNC_QUEUED))
+                stage(accountId, vaultKey, "analytics", conflict.id, conflict.version, analyticsJson(value))
+            }
+        }
+    }
+
+    private suspend fun applyHistory(
+        accountId: String,
+        remote: RemoteSyncItem,
+        json: JSONObject,
+        force: Boolean,
+    ): Boolean {
         val existing = dao.historyBySyncId(accountId, remote.id)
-        if (existing != null) return true
-        dao.insertRecord(
-            DictationRecord(
-                requestId = remote.id,
-                finalText = json.getString("text"),
-                createdAtMs = json.getLong("createdAtMs"),
-                zoneId = json.getString("zoneId"),
-                offsetSeconds = json.getInt("offsetSeconds"),
-                wordCount = json.getInt("wordCount"),
-                audioDurationMs = json.getLong("audioDurationMs"),
-                asrModel = json.optString("asrModel"),
-                polished = json.optBoolean("polished"),
-                asrMs = json.optLong("asrMs"),
-                polishMs = json.optLong("polishMs"),
-                totalMs = json.optLong("totalMs"),
-                pricingVersion = json.optNullableString("pricingVersion"),
-                inputTokens = json.optNullableLong("inputTokens"),
-                outputTokens = json.optNullableLong("outputTokens"),
-                asrNeurons = json.optNullableDouble("asrNeurons"),
-                polishNeurons = json.optNullableDouble("polishNeurons"),
-                totalNeurons = json.optNullableDouble("totalNeurons"),
-                estimatedCostUsd = json.optNullableDouble("estimatedCostUsd"),
-                ownerAccountId = accountId,
-                syncId = remote.id,
-                syncVersion = remote.version,
-                syncState = SYNCED,
-            ),
+        if (existing != null && !force) return true
+        val record = DictationRecord(
+            id = existing?.id ?: 0,
+            requestId = remote.id,
+            finalText = json.getString("text"),
+            createdAtMs = json.getLong("createdAtMs"),
+            zoneId = json.getString("zoneId"),
+            offsetSeconds = json.getInt("offsetSeconds"),
+            wordCount = json.getInt("wordCount"),
+            audioDurationMs = json.getLong("audioDurationMs"),
+            asrModel = json.optString("asrModel"),
+            polished = json.optBoolean("polished"),
+            asrMs = json.optLong("asrMs"),
+            polishMs = json.optLong("polishMs"),
+            totalMs = json.optLong("totalMs"),
+            pricingVersion = json.optNullableString("pricingVersion"),
+            inputTokens = json.optNullableLong("inputTokens"),
+            outputTokens = json.optNullableLong("outputTokens"),
+            asrNeurons = json.optNullableDouble("asrNeurons"),
+            polishNeurons = json.optNullableDouble("polishNeurons"),
+            totalNeurons = json.optNullableDouble("totalNeurons"),
+            estimatedCostUsd = json.optNullableDouble("estimatedCostUsd"),
+            ownerAccountId = accountId,
+            syncId = remote.id,
+            syncVersion = remote.version,
+            syncState = SYNCED,
         )
+        if (existing == null) dao.insertRecord(record) else dao.updateRecord(record)
         return true
     }
 
@@ -329,8 +362,20 @@ class SyncCoordinator private constructor(context: Context) {
         return true
     }
 
-    private suspend fun applyAnalytics(accountId: String, remote: RemoteSyncItem, json: JSONObject): Boolean {
-        if (dao.analyticsBySyncId(accountId, remote.id) != null) return true
+    private suspend fun applyAnalytics(
+        accountId: String,
+        remote: RemoteSyncItem,
+        json: JSONObject,
+        force: Boolean,
+    ): Boolean {
+        val existing = dao.analyticsBySyncId(accountId, remote.id)
+        if (existing != null) {
+            // The event's contribution already lives in daily_usage; a forced apply only
+            // needs to settle the sync bookkeeping so the record leaves the queued state.
+            if (!force) return true
+            dao.updateAnalyticsEvent(existing.copy(syncVersion = remote.version, syncState = SYNCED))
+            return true
+        }
         val event = AnalyticsSyncEvent(
                 syncId = remote.id,
                 ownerAccountId = accountId,

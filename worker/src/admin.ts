@@ -1,6 +1,7 @@
 import { ApiError } from "./errors";
 import { base64Url, decryptString, fromBase64Url, hmac, randomCode, randomToken, timingSafeEqual } from "./crypto";
 import { noStoreJson, readJson } from "./http";
+import { GLOBAL_DAILY_NEURON_LIMIT, MONTHLY_EMAIL_LIMIT } from "./limits";
 import {
   accountStatusValue,
   effectiveDailyAudioLimit,
@@ -419,6 +420,12 @@ async function verifyAdminCode(request: Request, env: AppEnv, requestId: string)
     ).bind(challenge.id).run();
     invalidAdminCode();
   }
+  // Same guarded consume as the account flow: the five-attempt cap and single-use
+  // rule hold atomically even when verifications race.
+  const consumed = await env.DB.prepare(
+    "UPDATE admin_login_challenges SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND attempts < 5",
+  ).bind(now, challenge.id).run();
+  if ((consumed.meta.changes ?? 0) !== 1) invalidAdminCode();
   const user = await env.DB.prepare(
     "SELECT id, role, status, email_ciphertext, email_nonce FROM users WHERE id = ?",
   ).bind(challenge.user_id).first<{
@@ -440,9 +447,6 @@ async function verifyAdminCode(request: Request, env: AppEnv, requestId: string)
   const absoluteExpiresAt = now + ADMIN_ABSOLUTE_LIFETIME_MS;
   try {
     await env.DB.batch([
-      env.DB.prepare(
-        "UPDATE admin_login_challenges SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL",
-      ).bind(now, challenge.id),
       env.DB.prepare(
         `INSERT INTO admin_browser_sessions
           (id, challenge_id, user_id, token_hash, csrf_hash, created_at, last_seen_at,
@@ -570,14 +574,14 @@ async function overview(env: AppEnv, requestId: string, period: string): Promise
       estimatedCostUsd: aggregate?.estimatedCostUsd ?? 0,
       todayGlobalUsedNeurons: global?.used_neurons ?? 0,
       todayGlobalReservedNeurons: global?.reserved_neurons ?? 0,
-      todayGlobalLimitNeurons: 8_000,
+      todayGlobalLimitNeurons: GLOBAL_DAILY_NEURON_LIMIT,
     },
     service: {
       loginSuccesses: aggregate?.loginSuccesses ?? 0,
       syncOperations: aggregate?.syncOperations ?? 0,
       verificationEmailsThisMonth: email?.verification_emails ?? 0,
       moderationEmailsThisMonth: email?.moderation_emails ?? 0,
-      monthlyEmailLimit: 2_500,
+      monthlyEmailLimit: MONTHLY_EMAIL_LIMIT,
     },
   });
 }

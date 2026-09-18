@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.0 — 2026-08-05
+
+- Replaced Cloudflare Access with a first-party, email-verified admin portal protected by session cookies, CSRF tokens, and a full audit trail.
+- Moved public releases to a new signing identity; existing v1.3 installations must uninstall before installing this release.
+
+## 1.4.0 — 2026-08-05
+
+- Added the operational admin console for account moderation, quota overrides, session revocation, and service metrics.
+
 ## 1.2.0 — 2026-08-05
 
 - Added the four-tab Home, History, Dictionary, and Settings dashboard.

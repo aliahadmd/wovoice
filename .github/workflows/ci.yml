@@ -16,7 +16,8 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          # Matches the daemon JVM pinned in gradle/gradle-daemon-jvm.properties.
+          java-version: "21"
           cache: gradle
       - uses: gradle/actions/setup-gradle@v4
       - run: ./gradlew testDebugUnitTest assembleDebug

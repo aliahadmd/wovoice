@@ -23,8 +23,10 @@ import com.aliahad.wovoice.network.TranscriptionClient
 import com.aliahad.wovoice.account.AccountResult
 import com.aliahad.wovoice.account.SessionManager
 import com.aliahad.wovoice.data.WoVoiceRepository
+import com.aliahad.wovoice.settings.SecretStore
 import com.aliahad.wovoice.settings.SettingsStore
 import com.aliahad.wovoice.settings.SetupActivity
+import com.aliahad.wovoice.settings.androidDeviceName
 import com.aliahad.wovoice.sync.SyncCoordinator
 import com.aliahad.wovoice.voice.VoiceCaptureService
 import com.aliahad.wovoice.voice.WavRecorder
@@ -76,7 +78,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
     override fun onCreate() {
         super.onCreate()
         settings = SettingsStore(this)
-        account = SessionManager.get(this)
+        account = SessionManager.get(settings, SecretStore(this), { settings.workerUrl }, ::androidDeviceName)
         bound = bindService(
             Intent(this, VoiceCaptureService::class.java),
             serviceConnection,
@@ -89,6 +91,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
             it.listener = this
             keyboard = it
             it.setPreferences(settings.hapticsEnabled, settings.animationsEnabled, settings.waveformEnabled)
+            it.setEmojiRecents(settings.recentEmojis)
             configureForEditor(currentInputEditorInfo)
             it.setState(state)
         }
@@ -204,6 +207,10 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
         currentInputConnection?.commitText(text, 1)
     }
 
+    override fun onEmojiUsed(emoji: String) {
+        settings.recentEmojis = EmojiRecents.updated(settings.recentEmojis, emoji)
+    }
+
     override fun onDelete() {
         val connection = currentInputConnection ?: return
         if (!connection.getSelectedText(0).isNullOrEmpty()) {
@@ -317,11 +324,21 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
                         } else first
                     }
                 }
-                if (!sessions.isActive(session) || session != currentSession || !isInputViewShown) return@launch
+                if (!sessions.isActive(session) || session != currentSession) return@launch
+                if (!isInputViewShown) {
+                    // The keyboard can reappear within the same input session (e.g. the
+                    // notification shade). Never leave it rendering a stale Processing state.
+                    discardProcessingState()
+                    return@launch
+                }
                 when (result) {
                     is TranscriptionClient.Result.Success -> {
                         val profile = withContext(Dispatchers.IO) { account.loadProfile() }
-                        if (!sessions.isActive(session) || session != currentSession || !isInputViewShown) return@launch
+                        if (!sessions.isActive(session) || session != currentSession) return@launch
+                        if (!isInputViewShown) {
+                            discardProcessingState()
+                            return@launch
+                        }
                         when {
                             profile !is AccountResult.Success -> showError(
                                 "WoVoice could not confirm your account status. The text was not inserted; tap to try again.",
@@ -352,7 +369,11 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
     }
 
     private fun commitFinalText(result: TranscriptionClient.Result.Success, audioDurationMs: Long) {
-        val connection: InputConnection = currentInputConnection ?: return
+        val connection = currentInputConnection
+        if (connection == null) {
+            discardProcessingState()
+            return
+        }
         val text = TextCommitPolicy.withLocalSpacing(previousCharacter(), result.text)
         val committed = text.isNotEmpty() && connection.commitText(text, 1)
         if (committed) {
@@ -428,6 +449,13 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
     private fun showError(message: String) {
         state = KeyboardState.Error(message.take(100))
         keyboard?.setState(state)
+    }
+
+    private fun discardProcessingState() {
+        if (state is KeyboardState.Processing) {
+            state = KeyboardState.VoiceIdle
+            keyboard?.setState(state)
+        }
     }
 
     private fun cancelActiveWork(resetState: Boolean = false) {

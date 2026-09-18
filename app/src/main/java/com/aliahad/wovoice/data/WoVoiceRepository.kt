@@ -90,7 +90,7 @@ class WoVoiceRepository(context: Context) {
 
     suspend fun metricsSince(sinceMs: Long): DashboardMetrics = metrics(dao.usageSince(owner(), sinceMs))
 
-    suspend fun history(query: String = ""): List<DictationRecord> = dao.history(owner(), query.trim())
+    suspend fun history(query: String = ""): List<DictationRecord> = dao.history(owner(), escapeLike(query.trim()))
 
     suspend fun deleteHistory(record: DictationRecord) {
         queueTombstone(record.ownerAccountId, "history", record.syncId, record.syncVersion)
@@ -119,7 +119,7 @@ class WoVoiceRepository(context: Context) {
         dao.dictionary(
             owner(),
             if (confirmed) DictionaryEntry.STATUS_CONFIRMED else DictionaryEntry.STATUS_SUGGESTED,
-            query.trim(),
+            escapeLike(query.trim()),
         )
 
     suspend fun addManualTerm(term: String): Boolean = addTerm(
@@ -173,8 +173,9 @@ class WoVoiceRepository(context: Context) {
     suspend fun bestGlossary(): List<String> = dao.bestDictionary(owner(), 100).map(DictionaryEntry::term)
 
     suspend fun noteCorrection() {
+        val ownerAccountId = owner() ?: return
         val now = ZonedDateTime.now()
-        dao.noteCorrection("${owner() ?: "legacy"}|${now.toLocalDate()}|${now.zone.id}")
+        dao.noteCorrection("$ownerAccountId|${now.toLocalDate()}|${now.zone.id}")
     }
 
     suspend fun importGlossary(values: List<String>) {
@@ -278,6 +279,11 @@ class WoVoiceRepository(context: Context) {
         private fun cleanTerm(value: String): String? = value.trim()
             .replace(Regex("\\s+"), " ")
             .takeIf { it.length in 2..80 && !it.contains('\n') }
+
+        // Room queries match with LIKE '%:query%' ESCAPE '\', so user input must have
+        // wildcards escaped or searching for "100%" or "a_b" returns wrong rows.
+        private fun escapeLike(value: String): String =
+            value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
         fun normalize(value: String): String = Normalizer.normalize(value.trim(), Normalizer.Form.NFKC).lowercase()
     }

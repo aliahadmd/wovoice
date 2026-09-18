@@ -1,6 +1,17 @@
 import { ApiError, errorResponse } from "./errors";
 import { handleAdminRoute, productionAdminServices } from "./admin";
 import { authenticateAccess, handleAccountRoute, handleAuthRoute, productionAuthServices } from "./auth";
+import {
+  NOVA_NEURONS_PER_MINUTE,
+  NOVA_USD_PER_MINUTE,
+  POLISH_INPUT_NEURONS_PER_MILLION,
+  POLISH_INPUT_USD_PER_MILLION,
+  POLISH_OUTPUT_NEURONS_PER_MILLION,
+  POLISH_OUTPUT_USD_PER_MILLION,
+  PRICING_VERSION,
+  WHISPER_NEURONS_PER_MINUTE,
+  WHISPER_USD_PER_MINUTE,
+} from "./pricing";
 import { productionServices } from "./models";
 import { parseOptions } from "./options";
 import { completeQuota, releaseQuota, reserveQuota, type QuotaReservation } from "./quota";
@@ -11,15 +22,6 @@ import { chooseSafePolish } from "./validation";
 import { readBodyLimited, validateWav } from "./wav";
 
 const INFERENCE_TIMEOUT_MS = 25_000;
-const PRICING_VERSION = "2026-07-08";
-const WHISPER_NEURONS_PER_MINUTE = 46.63;
-const WHISPER_USD_PER_MINUTE = 0.0005;
-const NOVA_NEURONS_PER_MINUTE = 472.73;
-const NOVA_USD_PER_MINUTE = 0.0052;
-const POLISH_INPUT_NEURONS_PER_MILLION = 18_182;
-const POLISH_OUTPUT_NEURONS_PER_MILLION = 27_273;
-const POLISH_INPUT_USD_PER_MILLION = 0.2;
-const POLISH_OUTPUT_USD_PER_MILLION = 0.3;
 const LEGACY_RELEASE_CERT_SHA256 =
   "3A:E4:93:35:28:83:E2:7F:98:ED:93:60:A4:C2:95:6B:66:2C:24:1C:74:FC:2B:B8:5C:5A:C1:6F:3F:2F:D1:D4";
 const RELEASE_V2_CERT_SHA256 =
@@ -105,8 +107,8 @@ export function createHandler(
         return syncResponse;
       }
 
-      principal = await authenticatePrincipal(request, env, url);
-      if (!principal.legacy) principal = await requireActiveAccount(env, principal);
+      principal = await authenticateAccess(request, env);
+      principal = await requireActiveAccount(env, principal);
       const rate = await env.RATE_LIMITER.limit({ key: principal.userId });
       if (!rate.success) {
         throw new ApiError(429, "RATE_LIMITED", true, "Too many recordings. Please wait a moment.", 60);
@@ -140,9 +142,7 @@ export function createHandler(
       audioBytes = audio.byteLength;
       const wav = validateWav(audio);
       audioSeconds = wav.durationSeconds;
-      if (!principal.legacy) {
-        reservation = await reserveQuota(env, principal.userId, requestId, wav.durationSeconds);
-      }
+      reservation = await reserveQuota(env, principal.userId, requestId, wav.durationSeconds);
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort("inference timeout"), INFERENCE_TIMEOUT_MS);
@@ -174,7 +174,7 @@ export function createHandler(
         const usage = buildUsage(selectedModel, wav.durationSeconds, polishTokens);
         totalNeurons = usage?.totalNeurons ?? null;
         estimatedCostUsd = usage?.estimatedCostUsd ?? 0;
-        if (principal && !principal.legacy) {
+        if (principal) {
           principal = await recheckActiveAccount(env, principal);
         }
         if (reservation) {
@@ -223,7 +223,7 @@ export function createHandler(
           // The scheduled cleanup releases any reservation left by an interrupted request.
         }
       }
-      if (principal && !principal.legacy && url.pathname === "/v1/transcriptions") {
+      if (principal && url.pathname === "/v1/transcriptions") {
         const activity = recordActivity(env, {
           userId: principal.userId,
           type: status === 200
@@ -327,34 +327,4 @@ export function buildUsage(
 function round(value: number, places: number): number {
   const factor = 10 ** places;
   return Math.round(value * factor) / factor;
-}
-
-async function authenticatePrincipal(request: Request, env: AppEnv, url: URL): Promise<Principal> {
-  if (url.hostname === "wovoice-transcription.aliahad.workers.dev" && await matchesLegacyToken(request, env)) {
-    const deadline = Date.parse(env.LEGACY_AUTH_DEADLINE);
-    if (Number.isFinite(deadline) && Date.now() < deadline) {
-      return {
-        userId: "legacy",
-        sessionId: "legacy",
-        legacy: true,
-        role: "user",
-        accountState: "active",
-        suspendedUntil: null,
-        publicStatusMessage: null,
-      };
-    }
-    throw new ApiError(426, "UPGRADE_REQUIRED", false, "Upgrade WoVoice to continue using voice input.");
-  }
-  return authenticateAccess(request, env);
-}
-
-async function matchesLegacyToken(request: Request, env: AppEnv): Promise<boolean> {
-  if (!env.CLIENT_TOKEN) return false;
-  const authorization = request.headers.get("authorization") ?? "";
-  const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
-  const [actualHash, expectedHash] = await Promise.all([
-    crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)),
-    crypto.subtle.digest("SHA-256", new TextEncoder().encode(env.CLIENT_TOKEN)),
-  ]);
-  return Boolean(token && crypto.subtle.timingSafeEqual(actualHash, expectedHash));
 }

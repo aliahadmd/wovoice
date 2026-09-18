@@ -1,9 +1,11 @@
 import { ApiError } from "./errors";
+import {
+  NOVA_NEURONS_PER_MINUTE,
+  POLISH_RESERVE_NEURONS,
+  WHISPER_NEURONS_PER_MINUTE,
+} from "./pricing";
 import type { AppEnv } from "./types";
 
-const WHISPER_NEURONS_PER_MINUTE = 46.63;
-const NOVA_NEURONS_PER_MINUTE = 472.73;
-const POLISH_RESERVE_NEURONS = 5;
 const RESERVATION_LIFETIME_MS = 2 * 60_000;
 
 export interface QuotaReservation {

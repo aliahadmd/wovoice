@@ -71,11 +71,11 @@ class DataPersistenceInstrumentedTest {
             estimatedCostUsd = 0.00002,
         )
 
-        database.dao().recordSuccess(record, aggregate, keepHistory = true)
-        val stored = database.dao().history("").single()
+        database.dao().recordSuccess(record, aggregate, event = null, keepHistory = true)
+        val stored = database.dao().history(null, "").single()
         database.dao().deleteRecord(stored)
 
-        assertEquals(0, database.dao().history("").size)
-        assertEquals(1, database.dao().usageSince(0).single().dictationCount)
+        assertEquals(0, database.dao().history(null, "").size)
+        assertEquals(1, database.dao().usageSince(null, 0).single().dictationCount)
     }
 }

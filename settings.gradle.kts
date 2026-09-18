@@ -24,4 +24,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "wovoice"
 include(":app")
+include(":shared")
+include(":desktop")
  

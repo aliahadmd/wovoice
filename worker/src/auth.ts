@@ -1,6 +1,7 @@
 import { ApiError } from "./errors";
 import { decryptString, encryptString, hmac, randomCode, randomToken, sha256, timingSafeEqual } from "./crypto";
 import { noStoreJson, readJson } from "./http";
+import { BASE_DAILY_AUDIO_SECONDS } from "./limits";
 import {
   accountStatusValue,
   effectiveDailyAudioLimit,
@@ -267,12 +268,19 @@ async function verifyCode(request: Request, env: AppEnv, requestId: string): Pro
     .bind(challengeId)
     .first<ChallengeRow>();
   const now = Date.now();
-  if (!challenge || challenge.consumed_at !== null || challenge.expires_at < now || challenge.attempts >= 5) invalidCode();
+  if (!challenge || challenge.consumed_at !== null || challenge.expires_at < now) invalidCode();
   const candidateHash = await hmac(env.AUTH_MASTER_KEY, `otp:${challenge.id}:${code}`);
   if (!timingSafeEqual(candidateHash, challenge.code_hash)) {
-    await env.DB.prepare("UPDATE login_challenges SET attempts = attempts + 1 WHERE id = ?").bind(challenge.id).run();
+    await env.DB.prepare("UPDATE login_challenges SET attempts = attempts + 1 WHERE id = ? AND consumed_at IS NULL")
+      .bind(challenge.id).run();
     invalidCode();
   }
+  // Consume the challenge in a single guarded statement so the five-attempt cap and
+  // single-use rule hold even when verifications race; D1 serializes this UPDATE.
+  const consumed = await env.DB.prepare(
+    "UPDATE login_challenges SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND attempts < 5",
+  ).bind(now, challenge.id).run();
+  if ((consumed.meta.changes ?? 0) !== 1) invalidCode();
 
   let createdUser = false;
   let user = await env.DB.prepare("SELECT * FROM users WHERE email_lookup = ?")
@@ -308,8 +316,6 @@ async function verifyCode(request: Request, env: AppEnv, requestId: string): Pro
   const authorizationCodeHash = await hmac(env.AUTH_MASTER_KEY, `authorization:${rawAuthorizationCode}`);
   const authorizationCodeId = crypto.randomUUID();
   const verificationStatements = [
-    env.DB.prepare("UPDATE login_challenges SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL")
-      .bind(now, challenge.id),
     env.DB.prepare(
       `INSERT INTO authorization_codes
         (id, token_hash, user_id, kind, code_challenge, created_at, expires_at, challenge_id)
@@ -517,7 +523,6 @@ export async function authenticateAccess(request: Request, env: AppEnv): Promise
   return {
     userId: row.user_id,
     sessionId: row.session_id,
-    legacy: false,
     role: row.role,
     accountState: row.status,
     suspendedUntil: row.suspended_until,
@@ -612,7 +617,7 @@ async function quotaSnapshot(env: AppEnv, userId: string): Promise<object> {
   ]);
   const used = usage?.used_audio_seconds ?? 0;
   const reserved = usage?.reserved_audio_seconds ?? 0;
-  const limit = user ? effectiveDailyAudioLimit(user) : 600;
+  const limit = user ? effectiveDailyAudioLimit(user) : BASE_DAILY_AUDIO_SECONDS;
   const resetAt = Date.parse(`${new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)}T00:00:00.000Z`);
   return {
     limitAudioSeconds: limit,

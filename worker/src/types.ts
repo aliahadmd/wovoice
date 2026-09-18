@@ -42,13 +42,11 @@ export type AppEnv = Omit<
   | "APP_ORIGIN"
   | "ENVIRONMENT"
   | "TURNSTILE_SITE_KEY"
-  | "LEGACY_AUTH_DEADLINE"
   | "AUTH_MASTER_KEY"
   | "PII_KEY"
   | "TURNSTILE_SECRET"
   | "SUPPORT_EMAIL"
   | "ADMIN_BOOTSTRAP_EMAIL"
-  | "CLIENT_TOKEN"
 > & {
   ASR_MODEL: string;
   AUTH_MASTER_KEY: string;
@@ -57,10 +55,8 @@ export type AppEnv = Omit<
   TURNSTILE_SITE_KEY: string;
   APP_ORIGIN: string;
   ENVIRONMENT: string;
-  LEGACY_AUTH_DEADLINE: string;
   SUPPORT_EMAIL?: string;
   ADMIN_BOOTSTRAP_EMAIL?: string;
-  CLIENT_TOKEN?: string;
 };
 
 export interface AuthServices {
@@ -77,7 +73,6 @@ export interface AuthServices {
 export interface Principal {
   userId: string;
   sessionId: string;
-  legacy: boolean;
   role: AccountRole;
   accountState: AccountState;
   suspendedUntil: number | null;

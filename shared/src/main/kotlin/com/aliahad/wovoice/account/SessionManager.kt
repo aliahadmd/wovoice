@@ -1,18 +1,21 @@
 package com.aliahad.wovoice.account
 
-import android.content.Context
-import android.os.Build
-import com.aliahad.wovoice.settings.SecretStore
-import com.aliahad.wovoice.settings.SettingsStore
+import com.aliahad.wovoice.account.SecretNames.PENDING_AUTH_INTENT
+import com.aliahad.wovoice.account.SecretNames.PENDING_PKCE_STATE
+import com.aliahad.wovoice.account.SecretNames.PENDING_PKCE_VERIFIER
+import com.aliahad.wovoice.account.SecretNames.REFRESH_TOKEN
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-class SessionManager private constructor(context: Context) {
-    private val appContext = context.applicationContext
-    private val settings = SettingsStore(appContext)
-    private val secrets = SecretStore(appContext)
-    private val client = AccountClient(settings.workerUrl)
+class SessionManager private constructor(
+    private val secrets: SecretsVault,
+    private val settings: AccountSettings,
+    baseUrlProvider: () -> String,
+    deviceNameProvider: () -> String,
+) {
+    private val client = AccountClient(baseUrlProvider)
     private val refreshMutex = Mutex()
+    private val deviceName = deviceNameProvider
 
     @Volatile private var accessToken: String? = null
     @Volatile private var accessExpiresAtMs: Long = 0
@@ -49,13 +52,13 @@ class SessionManager private constructor(context: Context) {
 
     fun prepareLogin(intent: String = AUTH_LOGIN): PkceRequest = Pkce.create().also { request ->
         require(intent == AUTH_LOGIN || intent == AUTH_DELETE)
-        secrets.putString(SecretStore.PENDING_PKCE_VERIFIER, request.verifier)
-        secrets.putString(SecretStore.PENDING_PKCE_STATE, request.state)
-        secrets.putString(SecretStore.PENDING_AUTH_INTENT, intent)
+        secrets.putString(PENDING_PKCE_VERIFIER, request.verifier)
+        secrets.putString(PENDING_PKCE_STATE, request.state)
+        secrets.putString(PENDING_AUTH_INTENT, intent)
     }
 
     fun pendingLoginMatches(state: String): Boolean {
-        val expected = secrets.getString(SecretStore.PENDING_PKCE_STATE) ?: return false
+        val expected = secrets.getString(PENDING_PKCE_STATE) ?: return false
         if (expected.length != state.length) return false
         var difference = 0
         expected.indices.forEach { index -> difference = difference or (expected[index].code xor state[index].code) }
@@ -63,11 +66,11 @@ class SessionManager private constructor(context: Context) {
     }
 
     suspend fun completeLogin(code: String, state: String): AccountResult<AccountUser> {
-        if (!pendingLoginMatches(state) || secrets.getString(SecretStore.PENDING_AUTH_INTENT) != AUTH_LOGIN) {
+        if (!pendingLoginMatches(state) || secrets.getString(PENDING_AUTH_INTENT) != AUTH_LOGIN) {
             clearPendingLogin()
             return AccountResult.Error("AUTH_REQUIRED", "The sign-in response could not be verified.", false, 401)
         }
-        val verifier = secrets.getString(SecretStore.PENDING_PKCE_VERIFIER)
+        val verifier = secrets.getString(PENDING_PKCE_VERIFIER)
         clearPendingLogin()
         if (verifier.isNullOrBlank()) {
             return AccountResult.Error("AUTH_REQUIRED", "The sign-in request expired. Please start again.", false, 401)
@@ -82,7 +85,7 @@ class SessionManager private constructor(context: Context) {
     }
 
     suspend fun completeAccountDeletion(reauthToken: String, state: String): AccountResult<Unit> {
-        if (!pendingLoginMatches(state) || secrets.getString(SecretStore.PENDING_AUTH_INTENT) != AUTH_DELETE) {
+        if (!pendingLoginMatches(state) || secrets.getString(PENDING_AUTH_INTENT) != AUTH_DELETE) {
             clearPendingLogin()
             return AccountResult.Error("AUTH_REQUIRED", "The deletion verification could not be verified.", false, 401)
         }
@@ -179,7 +182,7 @@ class SessionManager private constructor(context: Context) {
     }
 
     private fun refreshLocked(): AccountResult<String> {
-        val refreshToken = secrets.getString(SecretStore.REFRESH_TOKEN)
+        val refreshToken = secrets.getString(REFRESH_TOKEN)
         if (refreshToken.isNullOrBlank()) {
             clearLocalSession()
             return AccountResult.Error("AUTH_REQUIRED", "Sign in to use voice input.", false, 401)
@@ -199,7 +202,7 @@ class SessionManager private constructor(context: Context) {
     private fun install(tokens: SessionTokens) {
         accessToken = tokens.accessToken
         accessExpiresAtMs = System.currentTimeMillis() + tokens.accessExpiresInSeconds * 1_000L
-        secrets.putString(SecretStore.REFRESH_TOKEN, tokens.refreshToken)
+        secrets.putString(REFRESH_TOKEN, tokens.refreshToken)
         settings.accountId = tokens.user.id
         installUser(tokens.user)
     }
@@ -236,25 +239,31 @@ class SessionManager private constructor(context: Context) {
     )
 
     private fun clearPendingLogin() {
-        secrets.remove(SecretStore.PENDING_PKCE_VERIFIER)
-        secrets.remove(SecretStore.PENDING_PKCE_STATE)
-        secrets.remove(SecretStore.PENDING_AUTH_INTENT)
+        secrets.remove(PENDING_PKCE_VERIFIER)
+        secrets.remove(PENDING_PKCE_STATE)
+        secrets.remove(PENDING_AUTH_INTENT)
     }
 
-    private fun deviceName(): String = listOf(Build.MANUFACTURER, Build.MODEL)
-        .filter(String::isNotBlank)
-        .joinToString(" ")
-        .ifBlank { "Android device" }
-        .take(80)
-
     companion object {
-        private const val EXPIRY_SKEW_MS = 30_000L
         const val AUTH_LOGIN = "login"
         const val AUTH_DELETE = "delete"
+        private const val EXPIRY_SKEW_MS = 30_000L
+
         @Volatile private var instance: SessionManager? = null
 
-        fun get(context: Context): SessionManager = instance ?: synchronized(this) {
-            instance ?: SessionManager(context).also { instance = it }
+        /**
+         * Idempotent singleton. Each platform supplies its own secure storage and
+         * identity: Android wires Keystore-backed stores, macOS wires the Keychain
+         * vault, and both pass their own worker-URL and device-name providers.
+         */
+        fun get(
+            settings: AccountSettings,
+            secrets: SecretsVault,
+            baseUrlProvider: () -> String,
+            deviceNameProvider: () -> String,
+        ): SessionManager = instance ?: synchronized(this) {
+            instance ?: SessionManager(secrets, settings, baseUrlProvider, deviceNameProvider)
+                .also { instance = it }
         }
     }
 }

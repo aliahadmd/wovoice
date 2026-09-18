@@ -39,10 +39,6 @@ Admin responses contain operational metadata only. They never return audio, dict
 text, glossary entries, recovery material, or encrypted sync ciphertext. Account
 status changes, session revocation, and audit insertion use a transactional D1 batch.
 
-Current public status: [wovoice.aliahad.com/status](https://wovoice.aliahad.com/status). The status and authentication configuration endpoints are public; account, sync, and transcription endpoints require a short-lived user access token.
-
-`CLIENT_TOKEN` exists only during the seven-day v1.2 migration window on the old
-`workers.dev` hostname. It must be removed after the deadline; the production Custom
-Domain never accepts that shared credential.
+Current public status: [wovoice.aliahad.com/status](https://wovoice.aliahad.com/status). The status and authentication configuration endpoints are public; account, sync, and transcription endpoints require a short-lived user access token. The v1.2 shared-token legacy credential was a seven-day migration bridge only; that path has been removed and every protected endpoint now requires a per-user session, on the Custom Domain and `workers.dev` alike.
 
 Keep the production ASR selection pinned to the result of the personal 30-recording benchmark.

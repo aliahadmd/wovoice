@@ -21,7 +21,7 @@ data class RemoteSyncItem(
 data class SyncPage(val nextCursor: Long, val hasMore: Boolean, val items: List<RemoteSyncItem>)
 data class AppliedSyncItem(val id: String, val type: String, val version: Int)
 
-class SyncClient(private val baseUrl: String) {
+class SyncClient(private val baseUrlProvider: () -> String) {
     fun getVault(token: String): AccountResult<WrappedVaultKey?> = request("/v1/sync/vault", "GET", token) { json ->
         if (json.isNull("vault")) null else json.getJSONObject("vault").let {
             WrappedVaultKey(it.getString("wrappedKey"), it.getString("nonce"), it.getInt("keyVersion"))
@@ -121,7 +121,7 @@ class SyncClient(private val baseUrl: String) {
     }
 
     private fun endpoint(path: String): URL {
-        val base = URI(baseUrl.trimEnd('/'))
+        val base = URI(baseUrlProvider().trimEnd('/'))
         require(base.scheme.equals("https", true) && !base.host.isNullOrBlank())
         return URI("${base.toASCIIString()}$path").toURL()
     }

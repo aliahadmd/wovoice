@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import com.aliahad.wovoice.account.SecretsVault
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -11,11 +12,11 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /** Stores account credentials and vault material with a non-exportable Android Keystore key. */
-class SecretStore(context: Context) {
+class SecretStore(context: Context) : SecretsVault {
     private val preferences = context.applicationContext
         .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
-    fun putString(name: String, value: String?) {
+    override fun putString(name: String, value: String?) {
         require(NAME_PATTERN.matches(name))
         if (value.isNullOrBlank()) {
             remove(name)
@@ -30,7 +31,7 @@ class SecretStore(context: Context) {
             .apply()
     }
 
-    fun getString(name: String): String? {
+    override fun getString(name: String): String? {
         require(NAME_PATTERN.matches(name))
         return runCatching {
             val iv = Base64.decode(preferences.getString(ivKey(name), null) ?: return null, Base64.NO_WRAP)
@@ -44,9 +45,9 @@ class SecretStore(context: Context) {
         }.getOrNull()
     }
 
-    fun contains(name: String): Boolean = !getString(name).isNullOrBlank()
+    override fun contains(name: String): Boolean = !getString(name).isNullOrBlank()
 
-    fun remove(name: String) {
+    override fun remove(name: String) {
         require(NAME_PATTERN.matches(name))
         preferences.edit().remove(ivKey(name)).remove(ciphertextKey(name)).apply()
     }

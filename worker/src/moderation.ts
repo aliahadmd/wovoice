@@ -1,8 +1,8 @@
 import { ApiError } from "./errors";
 import { decryptString } from "./crypto";
+import { BASE_DAILY_AUDIO_SECONDS } from "./limits";
 import type { AccountRole, AccountState, AdminServices, AppEnv, Principal } from "./types";
 
-const BASE_DAILY_AUDIO_SECONDS = 600;
 const DETAIL_RETENTION_MS = 90 * 86_400_000;
 const AGGREGATE_RETENTION_MS = 397 * 86_400_000;
 

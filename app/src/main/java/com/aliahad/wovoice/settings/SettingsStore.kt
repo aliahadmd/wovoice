@@ -2,8 +2,9 @@ package com.aliahad.wovoice.settings
 
 import android.content.Context
 import com.aliahad.wovoice.BuildConfig
+import com.aliahad.wovoice.account.AccountSettings
 
-class SettingsStore(context: Context) {
+class SettingsStore(context: Context) : AccountSettings {
     private val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
     private val secrets = SecretStore(context)
 
@@ -63,7 +64,7 @@ class SettingsStore(context: Context) {
         get() = preferences.getBoolean(KEY_WAVEFORM, true)
         set(value) = preferences.edit().putBoolean(KEY_WAVEFORM, value).apply()
 
-    var accountId: String?
+    override var accountId: String?
         get() = preferences.getString(KEY_ACCOUNT_ID, null)
         set(value) {
             val editor = preferences.edit().putString(KEY_ACCOUNT_ID, value)
@@ -71,21 +72,21 @@ class SettingsStore(context: Context) {
             editor.apply()
         }
 
-    val lastAccountId: String? get() = preferences.getString(KEY_LAST_ACCOUNT_ID, null)
+    override val lastAccountId: String? get() = preferences.getString(KEY_LAST_ACCOUNT_ID, null)
 
-    var accountEmail: String?
+    override var accountEmail: String?
         get() = preferences.getString(KEY_ACCOUNT_EMAIL, null)
         set(value) = preferences.edit().putString(KEY_ACCOUNT_EMAIL, value).apply()
 
-    var accountRole: String
+    override var accountRole: String
         get() = preferences.getString(KEY_ACCOUNT_ROLE, "user") ?: "user"
         set(value) = preferences.edit().putString(KEY_ACCOUNT_ROLE, value).apply()
 
-    var accountState: String
+    override var accountState: String
         get() = preferences.getString(KEY_ACCOUNT_STATE, "active") ?: "active"
         set(value) = preferences.edit().putString(KEY_ACCOUNT_STATE, value).apply()
 
-    var accountSuspendedUntilMs: Long?
+    override var accountSuspendedUntilMs: Long?
         get() = preferences.getLong(KEY_ACCOUNT_SUSPENDED_UNTIL, 0L).takeIf { it > 0L }
         set(value) {
             val editor = preferences.edit()
@@ -94,11 +95,11 @@ class SettingsStore(context: Context) {
             editor.apply()
         }
 
-    var accountPublicMessage: String?
+    override var accountPublicMessage: String?
         get() = preferences.getString(KEY_ACCOUNT_PUBLIC_MESSAGE, null)
         set(value) = preferences.edit().putString(KEY_ACCOUNT_PUBLIC_MESSAGE, value).apply()
 
-    var accountSupportEmail: String
+    override var accountSupportEmail: String
         get() = preferences.getString(KEY_ACCOUNT_SUPPORT_EMAIL, "support@aliahad.com") ?: "support@aliahad.com"
         set(value) = preferences.edit().putString(KEY_ACCOUNT_SUPPORT_EMAIL, value).apply()
 
@@ -114,11 +115,19 @@ class SettingsStore(context: Context) {
         get() = preferences.getBoolean(KEY_VAULT_RECOVERY_ACKNOWLEDGED, false)
         set(value) = preferences.edit().putBoolean(KEY_VAULT_RECOVERY_ACKNOWLEDGED, value).apply()
 
-    fun isSignedIn(): Boolean = !accountId.isNullOrBlank() && secrets.contains(SecretStore.REFRESH_TOKEN)
+    // One emoji per line; dedupe and cap are applied by EmojiRecents before saving.
+    var recentEmojis: List<String>
+        get() = (preferences.getString(KEY_RECENT_EMOJIS, "") ?: "")
+            .lineSequence()
+            .filter(String::isNotEmpty)
+            .toList()
+        set(value) {
+            preferences.edit().putString(KEY_RECENT_EMOJIS, value.joinToString("\n")).apply()
+        }
 
-    fun isConfigured(): Boolean = isSignedIn()
+    override fun isSignedIn(): Boolean = !accountId.isNullOrBlank() && secrets.contains(SecretStore.REFRESH_TOKEN)
 
-    fun clearAccount() {
+    override fun clearAccount() {
         preferences.edit()
             .remove(KEY_ACCOUNT_ID)
             .remove(KEY_ACCOUNT_EMAIL)
@@ -162,5 +171,6 @@ class SettingsStore(context: Context) {
         const val KEY_LEGACY_CREDENTIAL_REMOVED = "legacy_credential_removed"
         const val KEY_SYNC_CURSOR = "sync_cursor"
         const val KEY_VAULT_RECOVERY_ACKNOWLEDGED = "vault_recovery_acknowledged"
+        const val KEY_RECENT_EMOJIS = "recent_emojis"
     }
 }

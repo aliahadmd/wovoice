@@ -13,10 +13,13 @@ abstract class WoVoiceDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     abstract suspend fun insertRecord(record: DictationRecord): Long
 
+    @Update
+    abstract suspend fun updateRecord(record: DictationRecord)
+
     @Query(
         """SELECT * FROM dictation_records
            WHERE ownerAccountId IS :ownerAccountId
-             AND (:query = '' OR finalText LIKE '%' || :query || '%')
+             AND (:query = '' OR finalText LIKE '%' || :query || '%' ESCAPE '\')
            ORDER BY createdAtMs DESC""",
     )
     abstract suspend fun history(ownerAccountId: String?, query: String): List<DictationRecord>
@@ -51,7 +54,7 @@ abstract class WoVoiceDao {
     @Query(
         """SELECT * FROM dictionary_entries
            WHERE ownerAccountId IS :ownerAccountId AND status = :status
-             AND (:query = '' OR term LIKE '%' || :query || '%')
+             AND (:query = '' OR term LIKE '%' || :query || '%' ESCAPE '\')
            ORDER BY CASE source WHEN 'manual' THEN 0 WHEN 'imported' THEN 1 ELSE 2 END,
                     useCount DESC, lastUsedAtMs DESC, term COLLATE NOCASE""",
     )
@@ -84,6 +87,9 @@ abstract class WoVoiceDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     abstract suspend fun insertAnalyticsEvent(value: AnalyticsSyncEvent): Long
+
+    @Update
+    abstract suspend fun updateAnalyticsEvent(value: AnalyticsSyncEvent)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract suspend fun upsertOutbox(value: EncryptedSyncOutboxItem): Long

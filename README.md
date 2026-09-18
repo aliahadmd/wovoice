@@ -53,7 +53,7 @@ WoVoice is a free public beta distributed directly through GitHub rather than th
 - Spoken **“new line”** and **“new paragraph”** commands.
 - A smooth tap-to-record, tap-to-finish workflow with a live waveform.
 - Automatic insertion into the same field where dictation began.
-- A complete manual QWERTY keyboard with numbers and two symbol pages.
+- A complete manual QWERTY keyboard with numbers, two symbol pages, and an emoji page.
 - A personal Dictionary for names, places, brands, and specialist terms.
 - Local History with search, copy, details, deletion, and Undo.
 - Private usage analytics such as speaking time, words, WPM, and processing speed.
@@ -201,6 +201,7 @@ Tap **123** to open numbers and common punctuation.
 - Tap **#+=** for brackets, mathematical signs, currencies, and additional punctuation.
 - Tap **123** to return to the first symbol page.
 - Tap **ABC** to return to letters.
+- Tap **🙂** on any page to open the emoji page with category tabs, a scrollable grid, and a Recents tab of recently used emojis.
 
 ### Manual-key functions
 
@@ -210,6 +211,7 @@ Tap **123** to open numbers and common punctuation.
 | **Space / English** | Inserts a normal space and shows the current keyboard language. |
 | **123** | Opens digits and the first symbol page. |
 | **#+=** | Opens the second symbol page. |
+| **🙂** | Opens the emoji page with categories and recently used emojis. |
 | **ABC** | Returns to letters. |
 | **Shift** | One tap changes the next letter; double-tap enables Caps Lock. |
 | **Action key** | Adapts to Done, Enter, Next, Search, Send, or Go. |

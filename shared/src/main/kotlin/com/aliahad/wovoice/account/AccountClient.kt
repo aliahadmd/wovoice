@@ -85,7 +85,7 @@ sealed interface AccountResult<out T> {
     ) : AccountResult<Nothing>
 }
 
-class AccountClient(private val baseUrl: String) {
+class AccountClient(private val baseUrlProvider: () -> String) {
     fun exchangeAuthorizationCode(code: String, verifier: String, deviceName: String): AccountResult<SessionTokens> =
         post(
             "/v1/auth/token",
@@ -268,7 +268,7 @@ class AccountClient(private val baseUrl: String) {
     }
 
     private fun endpoint(path: String): URL? = runCatching {
-        val base = URI(baseUrl.trim().trimEnd('/'))
+        val base = URI(baseUrlProvider().trim().trimEnd('/'))
         require(base.scheme.equals("https", true) && !base.host.isNullOrBlank() && path.startsWith('/'))
         URI("${base.toASCIIString()}$path").toURL()
     }.getOrNull()

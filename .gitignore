@@ -21,3 +21,8 @@ local.properties
 *.keystore
 *.p12
 /release
+build/
+/out
+/.v2c
+/.video_agent
+/.zcode
