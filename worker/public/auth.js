@@ -165,13 +165,21 @@ codeForm?.addEventListener("submit", async (event) => {
       challengeId,
       code: document.querySelector("#code").value.trim(),
     });
-    const callback = new URL("/app/callback", location.origin);
-    callback.searchParams.set(
+    const desktopPort = params.get("redirect_port");
+    let target;
+    if (params.get("platform") === "desktop" && /^\d{4,5}$/.test(desktopPort)) {
+      // Desktop clients listen on a loopback port; the PKCE verifier never
+      // leaves the app, so the code is useless to anything intercepting it.
+      target = new URL(`http://127.0.0.1:${desktopPort}/callback`);
+    } else {
+      target = new URL("/app/callback", location.origin);
+    }
+    target.searchParams.set(
       intent === "delete" ? "reauth_token" : "code",
       intent === "delete" ? result.reauthToken : result.authorizationCode,
     );
-    callback.searchParams.set("state", state);
-    location.replace(callback);
+    target.searchParams.set("state", state);
+    location.replace(target);
   } catch (error) {
     setStatus("#code-status", error.message, true);
     button.disabled = false;

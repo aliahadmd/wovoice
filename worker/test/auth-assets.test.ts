@@ -34,4 +34,11 @@ describe("passwordless sign-in assets", () => {
     expect(callbackScript).toContain("package=${packageName}");
     expect(callbackScript).toContain('"com.aliahad.wovoice"');
   });
+
+  it("redirects desktop clients to their validated loopback port", () => {
+    expect(authScript).toContain('params.get("platform") === "desktop"');
+    expect(authScript).toContain('params.get("redirect_port")');
+    expect(authScript).toContain("/^\\d{4,5}$/.test(desktopPort)");
+    expect(authScript).toContain("http://127.0.0.1:${desktopPort}/callback");
+  });
 });
