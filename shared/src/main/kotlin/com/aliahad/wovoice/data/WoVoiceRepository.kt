@@ -1,16 +1,16 @@
 package com.aliahad.wovoice.data
 
-import android.content.Context
+import com.aliahad.wovoice.account.AccountSettings
 import com.aliahad.wovoice.network.TranscriptionClient
-import com.aliahad.wovoice.settings.SettingsStore
 import java.text.Normalizer
 import java.time.ZonedDateTime
 import java.util.UUID
 import kotlin.math.roundToInt
 
-class WoVoiceRepository(context: Context) {
-    private val dao = WoVoiceDatabase.get(context).dao()
-    private val settings = SettingsStore(context)
+class WoVoiceRepository(
+    private val dao: WoVoiceDao,
+    private val settings: AccountSettings,
+) {
     private fun owner(): String? = settings.accountId
 
     suspend fun recordSuccessfulDictation(

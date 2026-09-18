@@ -107,11 +107,11 @@ class SettingsStore(context: Context) : AccountSettings {
         get() = preferences.getString(KEY_ACKNOWLEDGED_POLICY_VERSION, null)
         set(value) = preferences.edit().putString(KEY_ACKNOWLEDGED_POLICY_VERSION, value).apply()
 
-    var syncCursor: Long
+    override var syncCursor: Long
         get() = preferences.getLong(KEY_SYNC_CURSOR, 0L)
         set(value) = preferences.edit().putLong(KEY_SYNC_CURSOR, value.coerceAtLeast(0L)).apply()
 
-    var vaultRecoveryAcknowledged: Boolean
+    override var vaultRecoveryAcknowledged: Boolean
         get() = preferences.getBoolean(KEY_VAULT_RECOVERY_ACKNOWLEDGED, false)
         set(value) = preferences.edit().putBoolean(KEY_VAULT_RECOVERY_ACKNOWLEDGED, value).apply()
 

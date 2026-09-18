@@ -21,6 +21,8 @@ interface AccountSettings {
     var accountSuspendedUntilMs: Long?
     var accountPublicMessage: String?
     var accountSupportEmail: String
+    var syncCursor: Long
+    var vaultRecoveryAcknowledged: Boolean
 
     fun isSignedIn(): Boolean
     fun clearAccount()

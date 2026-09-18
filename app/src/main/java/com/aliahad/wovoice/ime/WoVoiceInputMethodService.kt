@@ -22,6 +22,7 @@ import com.aliahad.wovoice.core.TextCommitPolicy
 import com.aliahad.wovoice.network.TranscriptionClient
 import com.aliahad.wovoice.account.AccountResult
 import com.aliahad.wovoice.account.SessionManager
+import com.aliahad.wovoice.data.AndroidGraph
 import com.aliahad.wovoice.data.WoVoiceRepository
 import com.aliahad.wovoice.settings.SecretStore
 import com.aliahad.wovoice.settings.SettingsStore
@@ -47,7 +48,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
     private val client = TranscriptionClient()
     private lateinit var settings: SettingsStore
     private lateinit var account: SessionManager
-    private val repository by lazy { WoVoiceRepository(this) }
+    private val repository by lazy { AndroidGraph.repository(this) }
     private var keyboard: WoVoiceKeyboardView? = null
     private var state: KeyboardState = KeyboardState.VoiceIdle
     private var currentSession = 0L
@@ -385,7 +386,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
                     keepHistory = settings.historyEnabled,
                 )
                 if (settings.vaultRecoveryAcknowledged && account.cloudServicesAllowed) {
-                    SyncCoordinator.get(this@WoVoiceInputMethodService).syncNow()
+                    AndroidGraph.sync(this@WoVoiceInputMethodService).syncNow()
                 }
             }
             if (settings.learningSuggestionsEnabled && EditorPolicy.allowsLearning(currentInputEditorInfo)) {

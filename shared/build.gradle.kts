@@ -7,6 +7,7 @@ plugins {
     // AGP 9.3.1 embeds the Kotlin Gradle plugin (2.2.10) on the classpath, so this
     // must be applied unversioned; a pinned request cannot be version-checked.
     id("org.jetbrains.kotlin.jvm")
+    alias(libs.plugins.ksp)
 }
 
 kotlin {
@@ -24,6 +25,8 @@ dependencies {
     api(libs.kotlinx.coroutines.core)
     // Android ships org.json on-device; the desktop app adds the Maven artifact itself.
     compileOnly(libs.org.json)
+    api(libs.androidx.room.runtime)
+    ksp(libs.androidx.room.compiler)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

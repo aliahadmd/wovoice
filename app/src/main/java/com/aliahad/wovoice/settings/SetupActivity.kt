@@ -50,6 +50,7 @@ import com.aliahad.wovoice.account.SessionManager
 import com.aliahad.wovoice.dashboard.DictionaryAdapter
 import com.aliahad.wovoice.dashboard.HistoryAdapter
 import com.aliahad.wovoice.dashboard.HistoryRow
+import com.aliahad.wovoice.data.AndroidGraph
 import com.aliahad.wovoice.data.AnalyticsPeriod
 import com.aliahad.wovoice.data.DashboardMetrics
 import com.aliahad.wovoice.data.DictationRecord
@@ -166,8 +167,8 @@ class SetupActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         store = SettingsStore(this)
         account = SessionManager.get(store, SecretStore(this), { store.workerUrl }, ::androidDeviceName)
-        sync = SyncCoordinator.get(this)
-        repository = WoVoiceRepository(this)
+        sync = AndroidGraph.sync(this)
+        repository = AndroidGraph.repository(this)
         activeTab = savedInstanceState?.getInt(STATE_TAB, TAB_HOME) ?: TAB_HOME
         analyticsPeriod = AnalyticsPeriod.entries.getOrElse(savedInstanceState?.getInt(STATE_PERIOD) ?: 0) {
             AnalyticsPeriod.TODAY

@@ -1,7 +1,9 @@
 package com.aliahad.wovoice.sync
 
-import android.content.Context
 import com.aliahad.wovoice.account.AccountResult
+import com.aliahad.wovoice.account.SecretNames
+import com.aliahad.wovoice.account.SecretsVault
+import com.aliahad.wovoice.account.AccountSettings
 import com.aliahad.wovoice.account.SessionManager
 import com.aliahad.wovoice.data.AnalyticsSyncEvent
 import com.aliahad.wovoice.data.DictationRecord
@@ -11,10 +13,7 @@ import com.aliahad.wovoice.data.EncryptedSyncOutboxItem
 import com.aliahad.wovoice.data.SYNCED
 import com.aliahad.wovoice.data.SYNC_LOCAL
 import com.aliahad.wovoice.data.SYNC_QUEUED
-import com.aliahad.wovoice.data.WoVoiceDatabase
-import com.aliahad.wovoice.settings.SecretStore
-import com.aliahad.wovoice.settings.SettingsStore
-import com.aliahad.wovoice.settings.androidDeviceName
+import com.aliahad.wovoice.data.WoVoiceDao
 import org.json.JSONObject
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -34,13 +33,15 @@ sealed interface SyncResult {
     data class Error(val message: String, val retryable: Boolean) : SyncResult
 }
 
-class SyncCoordinator private constructor(context: Context) {
-    private val appContext = context.applicationContext
-    private val settings = SettingsStore(appContext)
-    private val secrets = SecretStore(appContext)
-    private val account = SessionManager.get(settings, secrets, { settings.workerUrl }, ::androidDeviceName)
-    private val client = SyncClient { settings.workerUrl }
-    private val dao = WoVoiceDatabase.get(appContext).dao()
+class SyncCoordinator private constructor(
+    private val secrets: SecretsVault,
+    private val settings: AccountSettings,
+    baseUrlProvider: () -> String,
+    deviceNameProvider: () -> String,
+    private val dao: WoVoiceDao,
+) {
+    private val account = SessionManager.get(settings, secrets, baseUrlProvider, deviceNameProvider)
+    private val client = SyncClient(baseUrlProvider)
     private val syncMutex = Mutex()
 
     suspend fun ensureVault(): VaultSetupResult {
@@ -56,19 +57,19 @@ class SyncCoordinator private constructor(context: Context) {
             is AccountResult.Success -> result.value
             is AccountResult.Error -> return VaultSetupResult.Error(result.message)
         }
-        val localVault = secrets.getString(SecretStore.VAULT_KEY)?.let(VaultCrypto::decodeSecret)
+        val localVault = secrets.getString(SecretNames.VAULT_KEY)?.let(VaultCrypto::decodeSecret)
         if (remote != null && localVault != null) return VaultSetupResult.Ready
         if (remote != null) return VaultSetupResult.NeedsRecovery
 
         val vaultKey = localVault ?: VaultCrypto.newSecret()
-        val recoverySecret = secrets.getString(SecretStore.RECOVERY_SECRET)
+        val recoverySecret = secrets.getString(SecretNames.RECOVERY_SECRET)
             ?.let(VaultCrypto::decodeSecret)
             ?: VaultCrypto.newSecret()
         val wrapped = VaultCrypto.wrapVaultKey(vaultKey, recoverySecret, accountId, KEY_VERSION)
         return when (val stored = client.putVault(token, wrapped, null)) {
             is AccountResult.Success -> {
-                secrets.putString(SecretStore.VAULT_KEY, VaultCrypto.encodeSecret(vaultKey))
-                secrets.putString(SecretStore.RECOVERY_SECRET, VaultCrypto.encodeSecret(recoverySecret))
+                secrets.putString(SecretNames.VAULT_KEY, VaultCrypto.encodeSecret(vaultKey))
+                secrets.putString(SecretNames.RECOVERY_SECRET, VaultCrypto.encodeSecret(recoverySecret))
                 VaultSetupResult.Created(VaultCrypto.encodeRecoveryKey(recoverySecret))
             }
             is AccountResult.Error -> {
@@ -95,12 +96,12 @@ class SyncCoordinator private constructor(context: Context) {
         } ?: return VaultSetupResult.Error("This account does not have an encrypted vault yet.")
         val vaultKey = VaultCrypto.unwrapVaultKey(remote, recoverySecret, accountId)
             ?: return VaultSetupResult.Error("The recovery key does not match this account.")
-        secrets.putString(SecretStore.VAULT_KEY, VaultCrypto.encodeSecret(vaultKey))
-        secrets.putString(SecretStore.RECOVERY_SECRET, VaultCrypto.encodeSecret(recoverySecret))
+        secrets.putString(SecretNames.VAULT_KEY, VaultCrypto.encodeSecret(vaultKey))
+        secrets.putString(SecretNames.RECOVERY_SECRET, VaultCrypto.encodeSecret(recoverySecret))
         return VaultSetupResult.Ready
     }
 
-    fun recoveryKey(): String? = secrets.getString(SecretStore.RECOVERY_SECRET)
+    fun recoveryKey(): String? = secrets.getString(SecretNames.RECOVERY_SECRET)
         ?.let(VaultCrypto::decodeSecret)
         ?.let(VaultCrypto::encodeRecoveryKey)
 
@@ -116,7 +117,7 @@ class SyncCoordinator private constructor(context: Context) {
             is VaultSetupResult.Error -> return SyncResult.Error(vault.message, true)
             else -> Unit
         }
-        val vaultKey = secrets.getString(SecretStore.VAULT_KEY)?.let(VaultCrypto::decodeSecret)
+        val vaultKey = secrets.getString(SecretNames.VAULT_KEY)?.let(VaultCrypto::decodeSecret)
             ?: return SyncResult.NeedsRecovery
         var token = when (val auth = account.validAccessToken()) {
             is AccountResult.Success -> auth.value
@@ -482,8 +483,19 @@ class SyncCoordinator private constructor(context: Context) {
         private const val MAX_BATCH = 100
         @Volatile private var instance: SyncCoordinator? = null
 
-        fun get(context: Context): SyncCoordinator = instance ?: synchronized(this) {
-            instance ?: SyncCoordinator(context).also { instance = it }
+        /**
+         * Idempotent singleton; each platform supplies its own secure storage,
+         * settings, worker/device identity, and Room DAO.
+         */
+        fun get(
+            secrets: SecretsVault,
+            settings: AccountSettings,
+            baseUrlProvider: () -> String,
+            deviceNameProvider: () -> String,
+            dao: WoVoiceDao,
+        ): SyncCoordinator = instance ?: synchronized(this) {
+            instance ?: SyncCoordinator(secrets, settings, baseUrlProvider, deviceNameProvider, dao)
+                .also { instance = it }
         }
     }
 }
