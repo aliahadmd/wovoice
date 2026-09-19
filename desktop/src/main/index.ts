@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, Menu, Tray, ipcMain, systemPreferences } from 'electron'
+import { app, shell, clipboard, BrowserWindow, Menu, Tray, ipcMain, systemPreferences } from 'electron'
 import { spawn } from 'child_process'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -7,6 +7,7 @@ import { SettingsStore } from './store'
 import { SessionStore } from './session'
 import { WorkerClient } from './worker'
 import { DesktopAuth } from './auth'
+import { openDatabase } from './db'
 import { DictationService } from './dictation'
 import { TriggerEngine } from './triggers'
 
@@ -16,6 +17,9 @@ let desktopAuth: DesktopAuth | null = null
 
 const settings = new SettingsStore()
 const worker = new WorkerClient(settings.workerUrl)
+// Desktop-owned database file: the abandoned Compose build left a Room-schema
+// wovoice-local.db here whose shape is incompatible; never reuse that name.
+const db = openDatabase(join(app.getPath('userData'), 'wovoice-desktop.db'))
 const session = new SessionStore(
   (refreshToken) =>
     worker.refresh(refreshToken).then((tokens) => ({
@@ -26,24 +30,39 @@ const session = new SessionStore(
   () => broadcastAuthState()
 )
 
-let historyCounter = 0
-const recentDictations: Array<{ text: string; asrModel: string; at: string }> = []
-
 const dictation = new DictationService({
   settings,
   getToken: async () => {
     const token = await session.accessToken()
     return token
   },
-  getGlossary: async () => [],
+  getGlossary: async () => db.bestGlossary(100),
   transcribe: (token, wav, glossary) => worker.transcribe(token, wav, glossary),
   recordHistory: (entry) => {
-    recentDictations.unshift({ text: entry.text, asrModel: entry.asrModel, at: new Date().toISOString() })
-    recentDictations.splice(20)
-    historyCounter += 1
+    const now = new Date()
+    db.insertRecord({
+      requestId: entry.requestId !== '' ? entry.requestId : crypto.randomUUID(),
+      finalText: entry.text,
+      createdAtMs: now.getTime(),
+      zoneId: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      wordCount: countWords(entry.text),
+      audioDurationMs: entry.durationMs,
+      asrModel: entry.asrModel,
+      polished: entry.polished,
+      asrMs: 0,
+      polishMs: 0,
+      totalMs: 0,
+      deleted: false
+    })
+    db.recordUsage(db.bestGlossary(100), entry.text)
     broadcastAuthState({ lastDictation: entry.text })
   }
 })
+
+function countWords(text: string): number {
+  const matches = text.match(/[\p{L}\p{N}]+(?:['’\u2010-\u2015-][\p{L}\p{N}]+)*/gu)
+  return matches === null ? 0 : matches.length
+}
 
 const triggers = new TriggerEngine(
   {
@@ -220,9 +239,30 @@ app.whenReady().then(() => {
     settings.set(key, value)
     return true
   })
+  ipcMain.handle('stats:home', (_event, period: string) => {
+    const now = Date.now()
+    const dayStart = new Date().setHours(0, 0, 0, 0)
+    const since = period === 'today' ? dayStart
+      : period === '7d' ? now - 6 * 86_400_000
+      : period === '30d' ? now - 29 * 86_400_000
+      : 0
+    return db.stats(since)
+  })
+  ipcMain.handle('history:list', (_event, query: string) => db.historySearch(query))
+  ipcMain.handle('history:delete', (_event, requestId: string) => db.deleteRecord(requestId))
+  ipcMain.handle('history:restore', (_event, requestId: string) => db.restoreRecord(requestId))
+  ipcMain.handle('history:copy', (_event, text: string) => {
+    clipboard.writeText(text)
+  })
+  ipcMain.handle('dictionary:list', (_event, query: string) => db.listTerms(query))
+  ipcMain.handle('dictionary:add', (_event, term: string) => db.addTerm(term))
+  ipcMain.handle('dictionary:delete', (_event, id: number) => db.deleteTerm(id))
+  ipcMain.handle('app:setLoginItem', (_event, openAtLogin: boolean) => {
+    app.setLoginItemSettings({ openAtLogin })
+    return app.getLoginItemSettings().openAtLogin
+  })
+  ipcMain.handle('app:getLoginItem', () => app.getLoginItemSettings().openAtLogin)
 
-  ipcMain.handle('dictation:recent', () => recentDictations.slice(0, 5))
-  ipcMain.handle('dictation:count', () => historyCounter)
 
   ipcMain.on('overlay:done', (_event, payload: { wav: ArrayBuffer; durationMs: number; containsSpeech: boolean }) => {
     void dictation.handleCapture(payload)

@@ -226,3 +226,77 @@ button {
   color: var(--muted);
   user-select: text;
 }
+
+.search {
+  width: 100%;
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 10px 12px;
+  font: inherit;
+  outline: none;
+  margin-bottom: 12px;
+}
+
+.search:focus {
+  border-color: var(--accent);
+}
+
+.add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.add-row .search {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.add-row .action {
+  flex-shrink: 0;
+}
+
+.history-item {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-item:last-child {
+  border-bottom: none;
+}
+
+.history-text {
+  line-height: 1.4;
+  user-select: text;
+}
+
+.history-meta {
+  color: var(--muted-2);
+  font-size: 12px;
+  margin: 4px 0 8px;
+}
+
+.history-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.undo {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-color: var(--accent);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.clamp {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 70%;
+}

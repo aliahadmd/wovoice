@@ -24,6 +24,33 @@ const api = {
     ipcRenderer.invoke('settings:get'),
   settingsSet: (key: 'keyboardShortcutEnabled' | 'middleClickEnabled', value: boolean): Promise<boolean> =>
     ipcRenderer.invoke('settings:set', key, value),
+  homeStats: (period: 'today' | '7d' | '30d' | 'all'): Promise<{
+    dictations: number
+    audioDurationMs: number
+    words: number
+    recent: Array<{ requestId: string; finalText: string; createdAtMs: number; wordCount: number; audioDurationMs: number }>
+  }> => ipcRenderer.invoke('stats:home', period),
+  historyList: (query: string): Promise<Array<{
+    requestId: string
+    finalText: string
+    createdAtMs: number
+    wordCount: number
+    audioDurationMs: number
+  }>> => ipcRenderer.invoke('history:list', query),
+  historyDelete: (requestId: string): Promise<void> => ipcRenderer.invoke('history:delete', requestId),
+  historyRestore: (requestId: string): Promise<void> => ipcRenderer.invoke('history:restore', requestId),
+  historyCopy: (text: string): Promise<void> => ipcRenderer.invoke('history:copy', text),
+  dictionaryList: (query: string): Promise<Array<{
+    id: number
+    term: string
+    source: string
+    useCount: number
+    lastUsedAtMs: number
+  }>> => ipcRenderer.invoke('dictionary:list', query),
+  dictionaryAdd: (term: string): Promise<boolean> => ipcRenderer.invoke('dictionary:add', term),
+  dictionaryDelete: (id: number): Promise<void> => ipcRenderer.invoke('dictionary:delete', id),
+  setLoginItem: (openAtLogin: boolean): Promise<boolean> => ipcRenderer.invoke('app:setLoginItem', openAtLogin),
+  getLoginItem: (): Promise<boolean> => ipcRenderer.invoke('app:getLoginItem'),
   overlay: {
     done: (payload: { wav: ArrayBuffer; durationMs: number; containsSpeech: boolean }): void =>
       ipcRenderer.send('overlay:done', payload),
