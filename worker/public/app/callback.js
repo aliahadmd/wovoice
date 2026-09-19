@@ -8,10 +8,17 @@ const valid = /^[A-Za-z0-9_-]{20,160}$/u.test(state)
   && !(code && reauthToken);
 
 const openApp = document.querySelector("#open-app");
+const desktopLink = document.querySelector("#open-desktop");
 if (valid) {
   const packageName = "com.aliahad.wovoice";
   openApp.href = `intent://${location.host}${location.pathname}${location.search}`
     + `#Intent;scheme=https;package=${packageName};end`;
+  // macOS/Windows desktop builds register the wovoice:// scheme; the code is
+  // PKCE-bound, so a deep-link hop stays useless to anything in between.
+  if (desktopLink !== null) {
+    desktopLink.href = `wovoice://callback?${location.search.split("?")[1] ?? ""}`;
+    desktopLink.classList.remove("hidden");
+  }
 } else {
   document.querySelector("#callback-title").textContent = "Start sign-in again";
   document.querySelector("#callback-message").textContent =

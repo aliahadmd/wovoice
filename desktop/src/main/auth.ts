@@ -46,6 +46,20 @@ export class DesktopAuth {
     return { ok: true, message: 'Complete sign-in in your browser.' }
   }
 
+  /**
+   * Completes sign-in from the wovoice:// deep link (fallback when the
+   * loopback listener missed the response, e.g. app restarted mid-sign-in).
+   */
+  handleExternalCallback(authorizationCode: string, returnedState: string): void {
+    if (this.state === null || returnedState !== this.state) {
+      this.onFailed('The sign-in response could not be verified. Please try again.')
+      return
+    }
+    this.server?.close()
+    this.server = null
+    this.onCompleted(authorizationCode)
+  }
+
   /** Waits for the loopback callback, then hands the code to onCompleted. */
   private awaitCallback(): void {
     const server = this.server

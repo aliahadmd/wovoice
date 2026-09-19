@@ -56,6 +56,22 @@ export class SettingsStore {
     this.set('vaultRecoveryAcknowledged', value)
   }
 
+  get keyboardShortcutEnabled(): boolean {
+    return this.get<boolean>('keyboardShortcutEnabled', true)
+  }
+
+  set keyboardShortcutEnabled(value: boolean) {
+    this.set('keyboardShortcutEnabled', value)
+  }
+
+  get middleClickEnabled(): boolean {
+    return this.get<boolean>('middleClickEnabled', false)
+  }
+
+  set middleClickEnabled(value: boolean) {
+    this.set('middleClickEnabled', value)
+  }
+
   clearAccount(): void {
     for (const key of ['accountId', 'accountEmail', 'accountRole', 'accountState', 'accountPublicMessage', 'accountSupportEmail', 'syncCursor', 'vaultRecoveryAcknowledged']) {
       delete this.data[key]

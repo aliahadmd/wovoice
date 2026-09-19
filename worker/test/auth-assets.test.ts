@@ -35,6 +35,11 @@ describe("passwordless sign-in assets", () => {
     expect(callbackScript).toContain('"com.aliahad.wovoice"');
   });
 
+  it("offers a wovoice:// deep link for desktop sign-in fallback", () => {
+    expect(callbackScript).toContain("wovoice://callback?");
+    expect(callbackScript).toContain('desktopLink.classList.remove("hidden")');
+  });
+
   it("redirects desktop clients to their validated loopback port", () => {
     expect(authScript).toContain('params.get("platform") === "desktop"');
     expect(authScript).toContain('params.get("redirect_port")');

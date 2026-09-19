@@ -1,4 +1,5 @@
-import { app, shell, BrowserWindow, Menu, Tray, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, Menu, Tray, ipcMain, systemPreferences } from 'electron'
+import { spawn } from 'child_process'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -6,6 +7,8 @@ import { SettingsStore } from './store'
 import { SessionStore } from './session'
 import { WorkerClient } from './worker'
 import { DesktopAuth } from './auth'
+import { DictationService } from './dictation'
+import { TriggerEngine } from './triggers'
 
 let dashboard: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -21,6 +24,38 @@ const session = new SessionStore(
       refreshToken: tokens.refreshToken
     })),
   () => broadcastAuthState()
+)
+
+let historyCounter = 0
+const recentDictations: Array<{ text: string; asrModel: string; at: string }> = []
+
+const dictation = new DictationService({
+  settings,
+  getToken: async () => {
+    const token = await session.accessToken()
+    return token
+  },
+  getGlossary: async () => [],
+  transcribe: (token, wav, glossary) => worker.transcribe(token, wav, glossary),
+  recordHistory: (entry) => {
+    recentDictations.unshift({ text: entry.text, asrModel: entry.asrModel, at: new Date().toISOString() })
+    recentDictations.splice(20)
+    historyCounter += 1
+    broadcastAuthState({ lastDictation: entry.text })
+  }
+})
+
+const triggers = new TriggerEngine(
+  {
+    get keyboardShortcutEnabled() {
+      return settings.get<boolean>('keyboardShortcutEnabled', true)
+    },
+    get middleClickEnabled() {
+      return settings.get<boolean>('middleClickEnabled', false)
+    }
+  },
+  (): void => dictation.begin(),
+  (): void => dictation.end()
 )
 
 function broadcastAuthState(extra: Record<string, unknown> = {}): void {
@@ -116,7 +151,10 @@ function createTray(): void {
       { label: 'WoVoice dashboard', click: showDashboard },
       { label: 'Sign in…', click: startSignIn },
       { type: 'separator' },
-      { label: 'Quit WoVoice', click: (): void => app.quit() }
+      { label: 'Quit WoVoice', click: (): void => {
+        triggers.unregister()
+        app.quit()
+      } }
     ])
   )
   tray.on('click', showDashboard)
@@ -129,6 +167,10 @@ app.whenReady().then(() => {
   }
 
   app.on('second-instance', showDashboard)
+
+  // wovoice:// deep link: sign-in callback fallback when launched or activated
+  // by the browser hand-off page.
+  app.setAsDefaultProtocolClient('wovoice')
   electronApp.setAppUserModelId('com.aliahad.wovoice.desktop')
 
   app.on('browser-window-created', (_, window) => {
@@ -146,14 +188,90 @@ app.whenReady().then(() => {
     const token = await session.accessToken()
     return worker.profile(token)
   })
+  ipcMain.handle('permissions:check', async () => ({
+    accessibility: await accessibilityTrusted(),
+    mic: systemPreferences.getMediaAccessStatus('microphone')
+  }))
+  ipcMain.handle('permissions:enableMicrophone', async () => {
+    const status = systemPreferences.getMediaAccessStatus('microphone')
+    if (status === 'granted') return true
+    // Fires the native microphone consent dialog when undetermined.
+    return systemPreferences.askForMediaAccess('microphone')
+  })
+  ipcMain.handle('permissions:openAccessibilityPane', () => {
+    void shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility')
+  })
+  ipcMain.handle('permissions:openListenPane', () => {
+    void shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent')
+  })
+  ipcMain.handle('permissions:enableAccessibility', async () => {
+    // Electron has no accessibility probe; the paste path itself reveals it.
+    // Opening the pane is the pragmatic prompt on denied/undetermined states.
+    void shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility')
+    return true
+  })
+  ipcMain.handle('settings:get', () => ({
+    keyboardShortcutEnabled: settings.get<boolean>('keyboardShortcutEnabled', true),
+    middleClickEnabled: settings.get<boolean>('middleClickEnabled', false),
+    workerUrl: settings.workerUrl
+  }))
+  ipcMain.handle('settings:set', (_event, key: string, value: boolean) => {
+    if (key !== 'keyboardShortcutEnabled' && key !== 'middleClickEnabled') return false
+    settings.set(key, value)
+    return true
+  })
 
+  ipcMain.handle('dictation:recent', () => recentDictations.slice(0, 5))
+  ipcMain.handle('dictation:count', () => historyCounter)
+
+  ipcMain.on('overlay:done', (_event, payload: { wav: ArrayBuffer; durationMs: number; containsSpeech: boolean }) => {
+    void dictation.handleCapture(payload)
+  })
+  ipcMain.on('overlay:cancelled', () => dictation.cancel())
+  ipcMain.on('overlay:fail', (_event, message: string) => dictation.fail(message))
+  ipcMain.on('overlay:label', () => {
+    // The overlay owns its label during capture; forwarded updates ignored in v1.
+  })
+
+  triggers.register()
   createDashboard()
   createTray()
 
   app.on('activate', () => {
     showDashboard()
   })
+
+  app.on('open-url', (event, url) => {
+    event.preventDefault()
+    routeDeepLink(url)
+  })
 })
+
+app.on('second-instance', (_event, argv) => {
+  const url = argv.find((value) => value.startsWith('wovoice://'))
+  if (url !== undefined) routeDeepLink(url)
+})
+
+async function accessibilityTrusted(): Promise<boolean> {
+  // System Events responds only when the app is trusted for accessibility.
+  const probe = spawn('osascript', ['-e', 'tell application "System Events" to count application processes'], {
+    stdio: 'ignore'
+  })
+  const code: number = await new Promise((resolve, reject) => {
+    probe.on('exit', resolve)
+    probe.on('error', reject)
+  })
+  return code === 0
+}
+
+function routeDeepLink(value: string): void {
+  const url = new URL(value)
+  if (url.hostname !== 'callback' && url.pathname !== '/callback') return
+  const code = url.searchParams.get('code') ?? ''
+  const state = url.searchParams.get('state') ?? ''
+  desktopAuth?.handleExternalCallback(code, state)
+  showDashboard()
+}
 
 app.on('window-all-closed', () => {
   // Tray keeps the app alive on macOS; quit only via the tray menu.

@@ -14,6 +14,31 @@ const api = {
       listener(state)
     ipcRenderer.on('auth:state', wrapped)
     return () => ipcRenderer.removeListener('auth:state', wrapped)
+  },
+  permissionsCheck: (): Promise<{ accessibility: boolean; mic: string }> =>
+    ipcRenderer.invoke('permissions:check'),
+  enableMicrophone: (): Promise<boolean> => ipcRenderer.invoke('permissions:enableMicrophone'),
+  openAccessibilityPane: (): Promise<void> => ipcRenderer.invoke('permissions:openAccessibilityPane'),
+  openListenPane: (): Promise<void> => ipcRenderer.invoke('permissions:openListenPane'),
+  settingsGet: (): Promise<{ keyboardShortcutEnabled: boolean; middleClickEnabled: boolean; workerUrl: string }> =>
+    ipcRenderer.invoke('settings:get'),
+  settingsSet: (key: 'keyboardShortcutEnabled' | 'middleClickEnabled', value: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('settings:set', key, value),
+  overlay: {
+    done: (payload: { wav: ArrayBuffer; durationMs: number; containsSpeech: boolean }): void =>
+      ipcRenderer.send('overlay:done', payload),
+    cancelled: (): void => ipcRenderer.send('overlay:cancelled'),
+    fail: (message: string): void => ipcRenderer.send('overlay:fail', message),
+    setLabel: (text: string): void => ipcRenderer.send('overlay:label', text),
+    onBegin: (listener: () => void): void => {
+      ipcRenderer.on('overlay:begin', () => listener())
+    },
+    onEnd: (listener: () => void): void => {
+      ipcRenderer.on('overlay:end', () => listener())
+    },
+    onCancel: (listener: () => void): void => {
+      ipcRenderer.on('overlay:cancel', () => listener())
+    }
   }
 }
 
