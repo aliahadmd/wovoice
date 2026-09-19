@@ -50,6 +50,9 @@ const api = {
   dictionaryAdd: (term: string): Promise<boolean> => ipcRenderer.invoke('dictionary:add', term),
   dictionaryDelete: (id: number): Promise<void> => ipcRenderer.invoke('dictionary:delete', id),
   setLoginItem: (openAtLogin: boolean): Promise<boolean> => ipcRenderer.invoke('app:setLoginItem', openAtLogin),
+  syncNow: (): Promise<{ kind: string; uploaded?: number; downloaded?: number; message?: string }> =>
+    ipcRenderer.invoke('sync:now'),
+  importRecoveryKey: (key: string): Promise<boolean> => ipcRenderer.invoke('sync:importKey', key),
   getLoginItem: (): Promise<boolean> => ipcRenderer.invoke('app:getLoginItem'),
   overlay: {
     done: (payload: { wav: ArrayBuffer; durationMs: number; containsSpeech: boolean }): void =>

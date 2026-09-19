@@ -219,10 +219,7 @@ function Dashboard(): React.JSX.Element {
                 </>
               )}
             </div>
-            <div className="card">
-              <h2>Encrypted sync</h2>
-              <p>History, dictionary, and analytics sync end-to-end encrypted with your phone — arriving with E6.</p>
-            </div>
+            <SyncCard signedIn={auth.signedIn} />
           </>
         )}
         {tab === 'settings' && (
@@ -580,6 +577,86 @@ function DictionaryTab(): React.JSX.Element {
         )}
       </div>
     </>
+  )
+}
+
+function SyncCard({ signedIn }: { signedIn: boolean }): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+  const [recoveryKey, setRecoveryKey] = useState('')
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState<string | null>(null)
+
+  const runSync = (): void => {
+    setBusy(true)
+    setResult(null)
+    window.api
+      .syncNow()
+      .then((outcome) => {
+        if (outcome.kind === 'ok') {
+          setResult(`Synced — ${outcome.uploaded ?? 0} uploaded, ${outcome.downloaded ?? 0} downloaded.`)
+        } else if (outcome.kind === 'needs-recovery') {
+          setResult('This Mac needs your recovery key to unlock the encrypted vault.')
+        } else if (outcome.kind === 'reconciled') {
+          setResult('Changes were reconciled with another device. Sync again to continue.')
+        } else {
+          setResult(outcome.message ?? 'Sync failed.')
+        }
+      })
+      .finally(() => setBusy(false))
+  }
+
+  const importKey = (): void => {
+    setImporting(true)
+    setImportResult(null)
+    window.api
+      .importRecoveryKey(recoveryKey)
+      .then((ok) => {
+        setImportResult(ok ? 'Vault unlocked on this Mac.' : 'That recovery key does not match this account.')
+        if (ok) setRecoveryKey('')
+      })
+      .finally(() => setImporting(false))
+  }
+
+  if (!signedIn) {
+    return (
+      <div className="card">
+        <h2>Encrypted sync</h2>
+        <p className="muted">Sign in to sync your history and dictionary end-to-end encrypted.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="card">
+      <h2>Encrypted sync</h2>
+      <p>
+        History and dictionary sync end-to-end encrypted with your phone. Paste the recovery
+        key from a signed-in device to unlock this Mac's vault.
+      </p>
+      <p>
+        <button className="action" onClick={runSync} disabled={busy}>
+          {busy ? 'Syncing…' : 'Sync now'}
+        </button>
+      </p>
+      {result !== null && <p className="mono">{result}</p>}
+      <div className="add-row" style={{ marginTop: 10 }}>
+        <input
+          className="search"
+          placeholder="WV1-… recovery key"
+          value={recoveryKey}
+          onChange={(event) => setRecoveryKey(event.target.value)}
+        />
+        <button
+          className="action secondary"
+          onClick={importKey}
+          disabled={importing || recoveryKey.trim().length === 0}
+        >
+          Import
+        </button>
+      </div>
+      {importResult !== null && <p className="mono">{importResult}</p>}
+    </div>
   )
 }
 

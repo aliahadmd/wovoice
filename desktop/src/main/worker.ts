@@ -34,10 +34,25 @@ export class WorkerError extends Error {
     readonly code: string,
     message: string,
     readonly retryable: boolean,
-    readonly status: number
+    readonly status: number,
+    readonly conflicts: Array<{
+      id: string
+      type: 'history' | 'dictionary' | 'analytics'
+      version: number
+      keyVersion: number
+      nonce: string | null
+      ciphertext: string | null
+      deleted: boolean
+    }> = []
   ) {
     super(message)
   }
+}
+
+export interface RemoteVault {
+  wrappedKey: string
+  nonce: string
+  keyVersion: number
 }
 
 export class WorkerClient {
@@ -94,6 +109,93 @@ export class WorkerClient {
       headers: { ...this.authHeaders(accessToken), 'Content-Type': 'application/json' },
       body: '{}'
     })
+  }
+
+  async getVault(accessToken: string): Promise<RemoteVault | null> {
+    const body = await this.json<{ vault: RemoteVault | null }>('/v1/sync/vault', {
+      method: 'GET',
+      headers: this.authHeaders(accessToken)
+    })
+    return body.vault
+  }
+
+  async putVault(
+    accessToken: string,
+    vault: RemoteVault,
+    expectedKeyVersion: number | null
+  ): Promise<number> {
+    const body = await this.json<{ keyVersion: number }>('/v1/sync/vault', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders(accessToken) },
+      body: JSON.stringify({ ...vault, expectedKeyVersion })
+    })
+    return body.keyVersion
+  }
+
+  async pull(
+    accessToken: string,
+    cursor: number
+  ): Promise<{
+    nextCursor: number
+    hasMore: boolean
+    items: Array<{
+      id: string
+      type: 'history' | 'dictionary' | 'analytics'
+      version: number
+      keyVersion: number
+      nonce: string | null
+      ciphertext: string | null
+      deleted: boolean
+    }>
+  }> {
+    return this.json(`/v1/sync?cursor=${cursor}&limit=100`, {
+      method: 'GET',
+      headers: this.authHeaders(accessToken)
+    })
+  }
+
+  async push(
+    accessToken: string,
+    items: Array<{
+      id: string
+      type: 'history' | 'dictionary'
+      baseVersion: number
+      keyVersion: number
+      nonce: string
+      ciphertext: string
+      deleted: boolean
+    }>
+  ): Promise<{ applied: Array<{ id: string; type: string; version: number }> }> {
+    const response = await fetch(`${this.baseUrl}/v1/sync/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders(accessToken) },
+      body: JSON.stringify({ items })
+    })
+    const body = (await response.json().catch(() => null)) as
+      | (Record<string, unknown> & {
+          error?: { code: string; message: string; retryable?: boolean }
+          conflicts?: Array<{
+            id: string
+            type: 'history' | 'dictionary' | 'analytics'
+            version: number
+            keyVersion: number
+            nonce: string | null
+            ciphertext: string | null
+            deleted: boolean
+          }>
+        })
+      | null
+    if (!response.ok) {
+      const error = body?.error
+      throw new WorkerError(
+        error?.code ?? `HTTP_${response.status}`,
+        error?.message ?? `Sync failed (${response.status}).`,
+        error?.retryable ?? response.status >= 500,
+        response.status,
+        response.status === 409 ? (body?.conflicts ?? []) : []
+      )
+    }
+    return body as { applied: Array<{ id: string; type: string; version: number }> }
   }
 
   async transcribe(

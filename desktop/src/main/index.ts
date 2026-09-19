@@ -8,6 +8,7 @@ import { SessionStore } from './session'
 import { WorkerClient } from './worker'
 import { DesktopAuth } from './auth'
 import { openDatabase } from './db'
+import { SyncService } from './sync'
 import { DictationService } from './dictation'
 import { TriggerEngine } from './triggers'
 
@@ -20,6 +21,20 @@ const worker = new WorkerClient(settings.workerUrl)
 // Desktop-owned database file: the abandoned Compose build left a Room-schema
 // wovoice-local.db here whose shape is incompatible; never reuse that name.
 const db = openDatabase(join(app.getPath('userData'), 'wovoice-desktop.db'))
+const sync = new SyncService({
+  worker,
+  settings: {
+    workerUrl: settings.workerUrl,
+    getAccountId: () => settings.get<string | null>('accountId', null),
+    getCursor: () => settings.syncCursor,
+    setCursor: (value) => {
+      settings.syncCursor = value
+    }
+  },
+  db,
+  getToken: async () => session.accessToken(),
+  vaultDir: app.getPath('userData')
+})
 const session = new SessionStore(
   (refreshToken) =>
     worker.refresh(refreshToken).then((tokens) => ({
@@ -56,6 +71,9 @@ const dictation = new DictationService({
     })
     db.recordUsage(db.bestGlossary(100), entry.text)
     broadcastAuthState({ lastDictation: entry.text })
+    void sync.syncNow().then((outcome) => {
+      if (outcome.kind === 'needs-recovery') broadcastAuthState({ syncNeedsRecovery: true })
+    })
   }
 })
 
@@ -249,14 +267,26 @@ app.whenReady().then(() => {
     return db.stats(since)
   })
   ipcMain.handle('history:list', (_event, query: string) => db.historySearch(query))
-  ipcMain.handle('history:delete', (_event, requestId: string) => db.deleteRecord(requestId))
+  ipcMain.handle('history:delete', (_event, requestId: string) => {
+    db.deleteRecord(requestId)
+    void sync.syncNow()
+  })
   ipcMain.handle('history:restore', (_event, requestId: string) => db.restoreRecord(requestId))
   ipcMain.handle('history:copy', (_event, text: string) => {
     clipboard.writeText(text)
   })
   ipcMain.handle('dictionary:list', (_event, query: string) => db.listTerms(query))
-  ipcMain.handle('dictionary:add', (_event, term: string) => db.addTerm(term))
-  ipcMain.handle('dictionary:delete', (_event, id: number) => db.deleteTerm(id))
+  ipcMain.handle('dictionary:add', (_event, term: string) => {
+    const added = db.addTerm(term)
+    if (added) void sync.syncNow()
+    return added
+  })
+  ipcMain.handle('dictionary:delete', (_event, id: number) => {
+    db.deleteTerm(id)
+    void sync.syncNow()
+  })
+  ipcMain.handle('sync:now', () => sync.syncNow())
+  ipcMain.handle('sync:importKey', (_event, key: string) => sync.importRecoveryKey(key))
   ipcMain.handle('app:setLoginItem', (_event, openAtLogin: boolean) => {
     app.setLoginItemSettings({ openAtLogin })
     return app.getLoginItemSettings().openAtLogin

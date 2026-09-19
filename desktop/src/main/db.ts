@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 
 /**
@@ -75,8 +76,16 @@ CREATE TABLE IF NOT EXISTS dictionary_entries (
   createdAtMs INTEGER NOT NULL,
   lastUsedAtMs INTEGER NOT NULL,
   useCount INTEGER NOT NULL DEFAULT 0,
+  syncId TEXT NOT NULL UNIQUE,
   syncState TEXT NOT NULL DEFAULT 'local',
   syncVersion INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS pending_tombstones (
+  recordType TEXT NOT NULL,
+  recordId TEXT NOT NULL,
+  baseVersion INTEGER NOT NULL,
+  createdAtMs INTEGER NOT NULL,
+  PRIMARY KEY (recordType, recordId)
 );
 `
 
@@ -121,9 +130,18 @@ export class WoVoiceDb {
   }
 
   deleteRecord(requestId: string): void {
+    const row = this.db
+      .prepare("SELECT syncVersion FROM dictation_records WHERE requestId = ?")
+      .get(requestId) as { syncVersion: number } | undefined
+    if (row === undefined) return
     this.db
-      .prepare("UPDATE dictation_records SET deleted = 1 WHERE requestId = ?")
+      .prepare("UPDATE dictation_records SET deleted = 1, syncState = 'local' WHERE requestId = ?")
       .run(requestId)
+    this.db
+      .prepare(
+        "INSERT OR REPLACE INTO pending_tombstones(recordType, recordId, baseVersion, createdAtMs) VALUES ('history', ?, ?, ?)"
+      )
+      .run(requestId, row.syncVersion, Date.now())
   }
 
   restoreRecord(requestId: string): void {
@@ -157,6 +175,151 @@ export class WoVoiceDb {
     return { ...agg, recent }
   }
 
+  // ---- Sync bookkeeping ----
+
+  historyNeedingSync(): DictationRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT requestId, finalText, createdAtMs, zoneId, wordCount, audioDurationMs,
+                asrModel, polished, asrMs, polishMs, totalMs
+         FROM dictation_records WHERE deleted = 0 AND syncState = 'local'
+         ORDER BY createdAtMs DESC LIMIT 100`
+      )
+      .all()
+    return rows.map(rowToRecord)
+  }
+
+  tombstones(): Array<{ recordType: string; recordId: string; baseVersion: number }> {
+    return this.db
+      .prepare("SELECT recordType, recordId, baseVersion FROM pending_tombstones LIMIT 100")
+      .all() as Array<{ recordType: string; recordId: string; baseVersion: number }>
+  }
+
+  markHistorySynced(requestId: string, version: number): void {
+    this.db
+      .prepare("UPDATE dictation_records SET syncState = 'synced', syncVersion = ? WHERE requestId = ?")
+      .run(version, requestId)
+  }
+
+  hardDeleteHistory(requestId: string): void {
+    this.db.prepare("DELETE FROM dictation_records WHERE requestId = ?").run(requestId)
+  }
+
+  historyByRequestId(requestId: string): DictationRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT requestId, finalText, createdAtMs, zoneId, wordCount, audioDurationMs,
+                asrModel, polished, asrMs, polishMs, totalMs
+         FROM dictation_records WHERE requestId = ?`
+      )
+      .get(requestId)
+    return row === undefined ? null : rowToRecord(row as Record<string, unknown>)
+  }
+
+  upsertRemoteHistory(
+    record: Omit<DictationRecord, 'deleted'>,
+    version: number
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO dictation_records
+           (requestId, finalText, createdAtMs, zoneId, wordCount, audioDurationMs,
+            asrModel, polished, asrMs, polishMs, totalMs, syncState, syncVersion)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?)
+         ON CONFLICT(requestId) DO UPDATE SET
+           finalText = excluded.finalText, syncVersion = excluded.syncVersion`
+      )
+      .run(
+        record.requestId,
+        record.finalText,
+        record.createdAtMs,
+        record.zoneId,
+        record.wordCount,
+        record.audioDurationMs,
+        record.asrModel,
+        record.polished ? 1 : 0,
+        record.asrMs,
+        record.polishMs,
+        record.totalMs,
+        version
+      )
+  }
+
+  dictionaryNeedingSync(): Array<DictionaryEntry & { syncId: string }> {
+    const rows = this.db
+      .prepare(
+        `SELECT id, term, normalizedTerm, status, source, createdAtMs, lastUsedAtMs, useCount, syncId
+         FROM dictionary_entries WHERE syncState = 'local' LIMIT 100`
+      )
+      .all() as Array<Record<string, unknown>>
+    return rows.map((row) => ({ ...rowToEntry(row), syncId: String(row.syncId) }))
+  }
+
+  markDictionarySynced(syncId: string, version: number): void {
+    this.db
+      .prepare("UPDATE dictionary_entries SET syncState = 'synced', syncVersion = ? WHERE syncId = ?")
+      .run(version, syncId)
+  }
+
+  dictionaryBySyncId(syncId: string): (DictionaryEntry & { syncId: string }) | null {
+    const row = this.db
+      .prepare(
+        `SELECT id, term, normalizedTerm, status, source, createdAtMs, lastUsedAtMs, useCount, syncId
+         FROM dictionary_entries WHERE syncId = ?`
+      )
+      .get(syncId) as Record<string, unknown> | undefined
+    return row === undefined ? null : { ...rowToEntry(row), syncId: String(row.syncId) }
+  }
+
+  upsertRemoteDictionary(
+    entry: {
+      term: string
+      normalizedTerm: string
+      status: string
+      source: string
+      createdAtMs: number
+      lastUsedAtMs: number
+      useCount: number
+    },
+    syncId: string,
+    version: number
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO dictionary_entries
+           (term, normalizedTerm, status, source, createdAtMs, lastUsedAtMs, useCount, syncId, syncState, syncVersion)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?)
+         ON CONFLICT(normalizedTerm) DO UPDATE SET
+           term = excluded.term, syncState = 'synced', syncVersion = excluded.syncVersion`
+      )
+      .run(
+        entry.term,
+        entry.normalizedTerm,
+        entry.status,
+        entry.source,
+        entry.createdAtMs,
+        entry.lastUsedAtMs,
+        entry.useCount,
+        syncId,
+        version
+      )
+  }
+
+  deleteDictionaryBySyncId(syncId: string): void {
+    this.db.prepare("DELETE FROM dictionary_entries WHERE syncId = ?").run(syncId)
+  }
+
+  applyTombstone(recordType: string, recordId: string): void {
+    if (recordType === 'history') this.hardDeleteHistory(recordId)
+    else if (recordType === 'dictionary') this.deleteDictionaryBySyncId(recordId)
+  }
+
+  clearTombstone(recordType: string, recordId: string): void {
+    this.db
+      .prepare("DELETE FROM pending_tombstones WHERE recordType = ? AND recordId = ?")
+      .run(recordType, recordId)
+  }
+
   // ---- Dictionary ----
 
   addTerm(rawTerm: string, source = 'manual'): boolean {
@@ -166,10 +329,10 @@ export class WoVoiceDb {
     const result = this.db
       .prepare(
         `INSERT OR IGNORE INTO dictionary_entries
-           (term, normalizedTerm, status, source, createdAtMs, lastUsedAtMs)
-         VALUES (?, ?, 'confirmed', ?, ?, ?)`
+           (term, normalizedTerm, status, source, createdAtMs, lastUsedAtMs, syncId)
+         VALUES (?, ?, 'confirmed', ?, ?, ?, ?)`
       )
-      .run(cleaned, normalize(cleaned), source, now, now)
+      .run(cleaned, normalize(cleaned), source, now, now, randomUUID())
     return Number(result.changes) === 1
   }
 
@@ -188,7 +351,16 @@ export class WoVoiceDb {
   }
 
   deleteTerm(id: number): void {
+    const row = this.db
+      .prepare("SELECT syncId, syncVersion FROM dictionary_entries WHERE id = ?")
+      .get(id) as { syncId: string; syncVersion: number } | undefined
+    if (row === undefined) return
     this.db.prepare("DELETE FROM dictionary_entries WHERE id = ?").run(id)
+    this.db
+      .prepare(
+        "INSERT OR REPLACE INTO pending_tombstones(recordType, recordId, baseVersion, createdAtMs) VALUES ('dictionary', ?, ?, ?)"
+      )
+      .run(row.syncId, row.syncVersion, Date.now())
   }
 
   bestGlossary(limit = 100): string[] {
