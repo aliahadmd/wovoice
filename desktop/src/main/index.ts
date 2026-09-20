@@ -240,6 +240,8 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('permissions:openListenPane', () => {
     void shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent')
+    // The tap may register late once the user grants the toggle.
+    setTimeout(() => triggers.registerIfMissing(), 1_500)
   })
   ipcMain.handle('permissions:enableAccessibility', async () => {
     // Electron has no accessibility probe; the paste path itself reveals it.
@@ -255,7 +257,15 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:set', (_event, key: string, value: boolean) => {
     if (key !== 'keyboardShortcutEnabled' && key !== 'middleClickEnabled') return false
     settings.set(key, value)
+    if (key === 'keyboardShortcutEnabled' && value) triggers.registerIfMissing()
+    if (key === 'middleClickEnabled' && value) triggers.registerIfMissing()
     return true
+  })
+  ipcMain.handle('triggers:status', () => triggers.isRegistered())
+  ipcMain.handle('triggers:reregister', () => {
+    triggers.unregister()
+    triggers.register()
+    return triggers.isRegistered()
   })
   ipcMain.handle('stats:home', (_event, period: string) => {
     const now = Date.now()

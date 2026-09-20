@@ -24,16 +24,41 @@ export class TriggerEngine {
     private readonly onStop: (trigger: Trigger) => void
   ) {}
 
+  private registered = false
+
   register(): void {
-    uIOhook.on('keydown', (event) => this.onKeyDown(Number(event.keycode)))
-    uIOhook.on('keyup', (event) => this.onKeyUp(Number(event.keycode)))
-    uIOhook.on('mousedown', (event) => this.onMouseDown(Number(event.button)))
-    uIOhook.on('mouseup', (event) => this.onMouseUp(Number(event.button)))
-    uIOhook.start()
+    if (this.registered) return
+    try {
+      uIOhook.on('keydown', (event) => {
+        console.log('[trigger] keydown', event.keycode)
+        this.onKeyDown(Number(event.keycode))
+      })
+      uIOhook.on('keyup', (event) => this.onKeyUp(Number(event.keycode)))
+      uIOhook.on('mousedown', (event) => {
+        console.log('[trigger] mousedown', event.button)
+        this.onMouseDown(Number(event.button))
+      })
+      uIOhook.on('mouseup', (event) => this.onMouseUp(Number(event.button)))
+      uIOhook.start()
+      this.registered = true
+    } catch (error) {
+      console.error('[trigger] registration failed:', error)
+      this.registered = false
+    }
+  }
+
+  isRegistered(): boolean {
+    return this.registered
+  }
+
+  registerIfMissing(): void {
+    if (!this.registered) this.register()
   }
 
   unregister(): void {
+    if (!this.registered) return
     uIOhook.stop()
+    this.registered = false
   }
 
   private tryStart(trigger: Trigger): boolean {
@@ -51,7 +76,14 @@ export class TriggerEngine {
   }
 
   private onKeyDown(keycode: number): void {
-    if (!this.settings.keyboardShortcutEnabled || keycode !== UiohookKey.Alt) return
+    // Trigger keys: Option (56/58) or Command (3675) — both have no text
+    // side-effect when held and released alone.
+    if (
+      !this.settings.keyboardShortcutEnabled ||
+      (keycode !== UiohookKey.Alt && keycode !== 58 && keycode !== UiohookKey.Meta && keycode !== 88)
+    ) {
+      return
+    }
     if (this.keyboardLatched) {
       this.keyboardLatched = false
       this.tryStop('keyboard')
@@ -62,7 +94,14 @@ export class TriggerEngine {
   }
 
   private onKeyUp(keycode: number): void {
-    if (!this.settings.keyboardShortcutEnabled || keycode !== UiohookKey.Alt) return
+    // Trigger keys: Option (56/58) or Command (3675) — both have no text
+    // side-effect when held and released alone.
+    if (
+      !this.settings.keyboardShortcutEnabled ||
+      (keycode !== UiohookKey.Alt && keycode !== 58 && keycode !== UiohookKey.Meta && keycode !== 88)
+    ) {
+      return
+    }
     if (this.keyboardLatched) return
     const held = Date.now() - this.keyDownAt
     if (held < 300) {
