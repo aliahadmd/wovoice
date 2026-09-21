@@ -14,6 +14,7 @@ jobs:
   release:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       WOVOICE_KEYSTORE_PATH: ${{ github.workspace }}/.release/wovoice-release-v2.jks
       WOVOICE_STORE_PASSWORD: ${{ secrets.WOVOICE_STORE_PASSWORD }}
@@ -26,7 +27,6 @@ jobs:
           distribution: temurin
           # Matches the daemon JVM pinned in gradle/gradle-daemon-jvm.properties.
           java-version: "21"
-          cache: gradle
       - uses: gradle/actions/setup-gradle@v4
       - uses: actions/setup-node@v4
         with:
@@ -63,7 +63,7 @@ jobs:
           chmod 600 "$WOVOICE_KEYSTORE_PATH"
 
       - name: Test and build signed APK
-        run: ./gradlew testDebugUnitTest assembleRelease
+        run: ./gradlew :app:testDebugUnitTest :shared:test assembleRelease
 
       - name: Verify and package APK
         env:
@@ -106,3 +106,71 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "WoVoice $RELEASE_VERSION" \
             --notes "WoVoice $RELEASE_VERSION release. See the repository README and CHANGELOG for what is new in this version."
+
+  # Builds and publishes the macOS DMG the README documents as a download —
+  # desktop keeps its own desktop-vX.Y.Z release line.
+  release-desktop:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Resolve desktop version
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./desktop/package.json').version")
+          test -n "$VERSION"
+          echo "DESKTOP_VERSION=$VERSION" >> "$GITHUB_ENV"
+          printf 'Publishing WoVoice Desktop %s\n' "$VERSION"
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Test
+        working-directory: desktop
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Build DMG
+        working-directory: desktop
+        env:
+          # CI has no access to the maintainer's personal Apple Development
+          # identity; ship unsigned unless a dedicated identity is configured.
+          WOVOICE_MAC_IDENTITY: ${{ secrets.WOVOICE_MAC_IDENTITY }}
+        run: |
+          set -euo pipefail
+          npm run build:native
+          npx electron-vite build
+          ARGS=(--mac dmg)
+          if [ -n "$WOVOICE_MAC_IDENTITY" ]; then
+            ARGS+=("-c.mac.identity=$WOVOICE_MAC_IDENTITY")
+          else
+            ARGS+=("-c.mac.identity=null")
+          fi
+          npx electron-builder "${ARGS[@]}"
+
+      - name: Publish desktop release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="desktop-v$DESKTOP_VERSION"
+          DMG="desktop/dist/wovoice-desktop-$DESKTOP_VERSION.dmg"
+          test -f "$DMG"
+          (cd desktop/dist && shasum -a 256 "$(basename "$DMG")" > "$(basename "$DMG").sha256")
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$DMG" "$DMG.sha256" --clobber
+          else
+            gh release create "$TAG" "$DMG" "$DMG.sha256" \
+              --target "$GITHUB_SHA" \
+              --title "WoVoice Desktop $DESKTOP_VERSION" \
+              --notes "WoVoice Desktop $DESKTOP_VERSION release. See the repository README for install instructions."
+          fi
