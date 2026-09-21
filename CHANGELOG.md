@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.5.1 — 2026-09-22
+
+### Android
+
+- Fixed the keyboard getting stuck on the processing pill when a recording was finished before the capture service connected, or when the keyboard was hidden mid-transcription.
+- Fixed the delete key's hold-to-repeat continuing to delete after the keyboard view was torn down mid-press.
+- The recorder no longer spins on microphone errors and now reports a failure instead of hanging silently.
+- Sign-out now warns when the server session could not be revoked, and encrypted sync merges edits made on other devices instead of discarding them in a conflict.
+- Records that fail to decrypt are retried after a recovery-key import instead of being skipped forever, and the local vault key is verified against the server's wrapped key before use.
+
+### Worker
+
+- Vault key rotation fails closed on concurrent updates instead of letting the last writer destroy the other device's wrapped key.
+- Account and sync routes are rate-limited (240 requests per minute per user) and malformed session ids return 400 instead of 500.
+
+### Desktop 1.0.1
+
+- Cancelled dictations no longer leak the microphone or get transcribed and pasted later.
+- Audio from 44.1 kHz microphones is resampled correctly (pitch-shifted recordings fixed), and the live sample rate is used for encoding.
+- Sign-in can be restarted after a failed or abandoned attempt; hung network requests and stuck pastes no longer disable dictation until relaunch.
+- The previous clipboard contents (text or image) are always restored after a paste, even when the paste fails.
+- Builds enable hardened runtime with full entitlements and declare the Apple Events usage description required for pasting.
+
 ## 1.5.0 — 2026-08-05
 
 - Replaced Cloudflare Access with a first-party, email-verified admin portal protected by session cookies, CSRF tokens, and a full audit trail.
