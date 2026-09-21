@@ -167,10 +167,17 @@ class SessionManager private constructor(
         return client.revokeSession(token, sessionId)
     }
 
-    suspend fun logout() {
+    /**
+     * Revokes the session server-side when possible and always clears the
+     * local session. Returns false when the server could not be reached — the
+     * refresh token then remains valid there with no local copy to revoke it,
+     * which callers should surface instead of swallowing.
+     */
+    suspend fun logout(): Boolean {
         val token = (validAccessToken() as? AccountResult.Success)?.value
-        if (token != null) client.logout(token)
+        val revoked = if (token != null) client.logout(token) is AccountResult.Success else false
         clearLocalSession()
+        return revoked
     }
 
     fun clearLocalSession() {
@@ -201,7 +208,10 @@ class SessionManager private constructor(
 
     private fun install(tokens: SessionTokens) {
         accessToken = tokens.accessToken
-        accessExpiresAtMs = System.currentTimeMillis() + tokens.accessExpiresInSeconds * 1_000L
+        // Clamp the TTL: a hostile or buggy value must not overflow into a
+        // negative expiry (perpetual refresh) or lock a token in for years.
+        accessExpiresAtMs = System.currentTimeMillis() +
+            tokens.accessExpiresInSeconds.coerceIn(0L, MAX_ACCESS_TTL_SECONDS) * 1_000L
         secrets.putString(REFRESH_TOKEN, tokens.refreshToken)
         settings.accountId = tokens.user.id
         installUser(tokens.user)
@@ -248,6 +258,10 @@ class SessionManager private constructor(
         const val AUTH_LOGIN = "login"
         const val AUTH_DELETE = "delete"
         private const val EXPIRY_SKEW_MS = 30_000L
+
+        // The server issues 15-minute access tokens; anything claiming longer
+        // than a day is a hostile or broken response.
+        private const val MAX_ACCESS_TTL_SECONDS = 24 * 60 * 60L
 
         @Volatile private var instance: SessionManager? = null
 

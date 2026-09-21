@@ -24,6 +24,14 @@ interface AccountSettings {
     var syncCursor: Long
     var vaultRecoveryAcknowledged: Boolean
 
+    /**
+     * Remote record ids that could not be decrypted or parsed during pull and
+     * were skipped so the cursor could advance. Persisted so a restart doesn't
+     * forget them; importing a recovery key clears the set and rewinds the
+     * cursor so the records are fetched and retried.
+     */
+    var syncDeadLetters: Set<String>
+
     fun isSignedIn(): Boolean
     fun clearAccount()
 }

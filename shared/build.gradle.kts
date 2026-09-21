@@ -21,6 +21,12 @@ java {
     targetCompatibility = JavaVersion.VERSION_11
 }
 
+// Export the Room schema so future migrations can be written and validated
+// against real history instead of guesswork (schema v2 shipped unexported).
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 dependencies {
     api(libs.kotlinx.coroutines.core)
     // Android ships org.json on-device; the desktop app adds the Maven artifact itself.

@@ -233,10 +233,12 @@ class AccountClient(private val baseUrlProvider: () -> String) {
     )
 
     private fun parseQuota(json: JSONObject) = AccountQuota(
-        limitAudioSeconds = json.optDouble("limitAudioSeconds"),
-        usedAudioSeconds = json.optDouble("usedAudioSeconds"),
-        reservedAudioSeconds = json.optDouble("reservedAudioSeconds"),
-        remainingAudioSeconds = json.optDouble("remainingAudioSeconds"),
+        // Defaulted reads: an absent key must not become NaN and poison every
+        // downstream quota display.
+        limitAudioSeconds = json.optDouble("limitAudioSeconds", 0.0),
+        usedAudioSeconds = json.optDouble("usedAudioSeconds", 0.0),
+        reservedAudioSeconds = json.optDouble("reservedAudioSeconds", 0.0),
+        remainingAudioSeconds = json.optDouble("remainingAudioSeconds", 0.0),
         resetAtMs = json.optLong("resetAt"),
         overrideExpiresAtMs = json.optNullableLong("overrideExpiresAt"),
     )

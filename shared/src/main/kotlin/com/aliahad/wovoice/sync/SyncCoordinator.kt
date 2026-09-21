@@ -58,13 +58,29 @@ class SyncCoordinator private constructor(
             is AccountResult.Error -> return VaultSetupResult.Error(result.message)
         }
         val localVault = secrets.getString(SecretNames.VAULT_KEY)?.let(VaultCrypto::decodeSecret)
-        if (remote != null && localVault != null) return VaultSetupResult.Ready
+        if (remote != null && localVault != null) {
+            // Prove the stored key really is this account's vault key by
+            // unwrapping the remote wrap with the stored recovery secret. A
+            // stale key (left over from another account, or pre-rotation)
+            // must surface as NeedsRecovery instead of silently decrypting
+            // nothing and pushing records no device can read.
+            val recovery = secrets.getString(SecretNames.RECOVERY_SECRET)
+                ?.let(VaultCrypto::decodeSecret)
+                ?: return VaultSetupResult.NeedsRecovery
+            val unwrapped = VaultCrypto.unwrapVaultKey(remote, recovery, accountId)
+            return if (unwrapped != null && unwrapped.contentEquals(localVault)) {
+                VaultSetupResult.Ready
+            } else {
+                VaultSetupResult.NeedsRecovery
+            }
+        }
         if (remote != null) return VaultSetupResult.NeedsRecovery
 
-        val vaultKey = localVault ?: VaultCrypto.newSecret()
-        val recoverySecret = secrets.getString(SecretNames.RECOVERY_SECRET)
-            ?.let(VaultCrypto::decodeSecret)
-            ?: VaultCrypto.newSecret()
+        // No remote vault: any locally stored key belongs to a previous (or
+        // foreign) account whose vault no longer exists server-side, so always
+        // mint fresh secrets for this account.
+        val vaultKey = VaultCrypto.newSecret()
+        val recoverySecret = VaultCrypto.newSecret()
         val wrapped = VaultCrypto.wrapVaultKey(vaultKey, recoverySecret, accountId, KEY_VERSION)
         return when (val stored = client.putVault(token, wrapped, null)) {
             is AccountResult.Success -> {
@@ -98,6 +114,14 @@ class SyncCoordinator private constructor(
             ?: return VaultSetupResult.Error("The recovery key does not match this account.")
         secrets.putString(SecretNames.VAULT_KEY, VaultCrypto.encodeSecret(vaultKey))
         secrets.putString(SecretNames.RECOVERY_SECRET, VaultCrypto.encodeSecret(recoverySecret))
+        // Records that failed to decrypt under the old key were skipped and
+        // dead-lettered; rewind the cursor so the next sync fetches them again
+        // now that the matching key is installed. (A fresh device with no
+        // dead letters needs no rewind — re-pulling everything is pure waste.)
+        if (settings.syncDeadLetters.isNotEmpty()) {
+            settings.syncDeadLetters = emptySet()
+            settings.syncCursor = 0
+        }
         return VaultSetupResult.Ready
     }
 
@@ -125,6 +149,7 @@ class SyncCoordinator private constructor(
         }
 
         var downloaded = 0
+        var deadLetters = settings.syncDeadLetters
         while (true) {
             val pageResult = client.pull(token, settings.syncCursor)
             val page = when (pageResult) {
@@ -141,8 +166,19 @@ class SyncCoordinator private constructor(
                 }
             }
             page.items.forEach { item ->
-                if (applyRemote(accountId, vaultKey, item)) downloaded++
+                // Apply failures must never abort the whole sync (a single
+                // malformed payload used to throw out of getString()); they
+                // are dead-lettered instead so the cursor can keep advancing.
+                val applied = runCatching { applyRemote(accountId, vaultKey, item) }
+                    .getOrElse { false }
+                if (applied) {
+                    downloaded++
+                    deadLetters = deadLetters - item.id
+                } else if (deadLetters.size < MAX_DEAD_LETTERS) {
+                    deadLetters = deadLetters + item.id
+                }
             }
+            if (deadLetters != settings.syncDeadLetters) settings.syncDeadLetters = deadLetters
             settings.syncCursor = page.nextCursor
             if (!page.hasMore) break
         }
@@ -305,7 +341,13 @@ class SyncCoordinator private constructor(
         force: Boolean,
     ): Boolean {
         val existing = dao.historyBySyncId(accountId, remote.id)
-        if (existing != null && !force) return true
+        if (existing != null && !force) {
+            if (remote.version <= existing.syncVersion) return true
+            // A local edit not yet pushed keeps its content until the push
+            // (and any conflict resolution) settles; anything already synced
+            // with a lower version is stale and takes the remote update.
+            if (existing.syncState == SYNC_LOCAL || existing.syncState == SYNC_QUEUED) return true
+        }
         val record = DictationRecord(
             id = existing?.id ?: 0,
             requestId = remote.id,
@@ -343,7 +385,10 @@ class SyncCoordinator private constructor(
         force: Boolean,
     ): Boolean {
         val existing = dao.dictionaryBySyncId(accountId, remote.id)
-        if (!force && (existing?.syncState == SYNC_LOCAL || existing?.syncState == SYNC_QUEUED)) return false
+        // Keeping a locally edited/queued term is a handled outcome, not a
+        // failure: the pending push resolves ownership, and reporting false
+        // here would wrongly dead-letter the remote item.
+        if (!force && (existing?.syncState == SYNC_LOCAL || existing?.syncState == SYNC_QUEUED)) return true
         val term = json.getString("term")
         val value = DictionaryEntry(
             id = existing?.id ?: 0,
@@ -387,9 +432,11 @@ class SyncCoordinator private constructor(
                 processingMs = json.getLong("processingMs"),
                 polished = json.optBoolean("polished"),
                 corrected = json.optBoolean("corrected"),
-                asrNeurons = json.optDouble("asrNeurons"),
-                polishNeurons = json.optDouble("polishNeurons"),
-                estimatedCostUsd = json.optDouble("estimatedCostUsd"),
+                // optDouble without a fallback yields NaN for a missing key,
+                // which would poison every dashboard total for that day.
+                asrNeurons = json.optDouble("asrNeurons", 0.0),
+                polishNeurons = json.optDouble("polishNeurons", 0.0),
+                estimatedCostUsd = json.optDouble("estimatedCostUsd", 0.0),
                 syncVersion = remote.version,
                 syncState = SYNCED,
             )
@@ -481,6 +528,7 @@ class SyncCoordinator private constructor(
         private const val KEY_VERSION = 1
         private const val SCHEMA_VERSION = 1
         private const val MAX_BATCH = 100
+        private const val MAX_DEAD_LETTERS = 50
         @Volatile private var instance: SyncCoordinator? = null
 
         /**

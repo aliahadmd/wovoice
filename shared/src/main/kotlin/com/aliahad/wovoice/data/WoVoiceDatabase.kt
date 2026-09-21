@@ -12,7 +12,7 @@ import androidx.room.RoomDatabase
         EncryptedSyncOutboxItem::class,
     ],
     version = 2,
-    exportSchema = false,
+    exportSchema = true,
 )
 abstract class WoVoiceDatabase : RoomDatabase() {
     abstract fun dao(): WoVoiceDao
