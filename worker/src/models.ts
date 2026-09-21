@@ -64,7 +64,7 @@ export const productionServices: Services = {
           {
             role: "system",
             content:
-              "You lightly clean speech-to-text. Correct only obvious grammar, casing, spacing, and punctuation; remove filler words. Never add facts, summarize, alter meaning, or change any name or number. Return only JSON matching the schema.",
+              "You lightly clean speech-to-text. Correct only obvious grammar, casing, spacing, and punctuation; remove filler words. Always punctuate: end sentences with . ? or !, and add commas where a speaker would naturally pause. Capitalize sentence starts. Never add facts, summarize, alter meaning, or change any name or number. Return only JSON with the cleaned transcript.",
           },
           {
             role: "user",
@@ -91,15 +91,29 @@ export const productionServices: Services = {
     );
     const content = response.choices?.[0]?.message.content;
     if (!content) throw new Error("Cleanup returned no text");
-    const parsed: unknown = JSON.parse(content);
-    if (!isRecord(parsed) || typeof parsed.text !== "string") {
-      throw new Error("Cleanup returned an invalid schema");
+    // gpt-oss-20b does not reliably honor response_format's property name: it
+    // has been observed returning {"transcript": "..."} against a schema named
+    // "text", and may fence JSON in markdown. Accept every benign shape — the
+    // chooseSafePolish gate still vets whatever we extract.
+    const unfenced = content.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    let cleaned: string | null = null;
+    try {
+      const parsed: unknown = JSON.parse(unfenced);
+      if (isRecord(parsed)) {
+        if (typeof parsed.text === "string") cleaned = parsed.text;
+        else if (typeof parsed.transcript === "string") cleaned = parsed.transcript;
+        else if (typeof parsed.cleaned === "string") cleaned = parsed.cleaned;
+      }
+    } catch {
+      // Not JSON — fall through and treat the whole content as the candidate.
     }
+    if (cleaned === null && unfenced.length > 0) cleaned = unfenced;
+    if (cleaned === null) throw new Error("Cleanup returned an invalid schema");
     const usage = response.usage;
     const inputTokens = usage && "prompt_tokens" in usage ? usage.prompt_tokens : usage?.input_tokens;
     const outputTokens = usage && "completion_tokens" in usage ? usage.completion_tokens : usage?.output_tokens;
     return {
-      text: parsed.text,
+      text: cleaned,
       inputTokens: inputTokens ?? null,
       outputTokens: outputTokens ?? null,
     };
