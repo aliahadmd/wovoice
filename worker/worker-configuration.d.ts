@@ -6,6 +6,7 @@ interface __BaseEnv_Env {
 	EMAIL: SendEmail;
 	RATE_LIMITER: RateLimit;
 	AUTH_RATE_LIMITER: RateLimit;
+	USER_API_RATE_LIMITER: RateLimit;
 	AI: Ai;
 	ASSETS: Fetcher;
 	ASR_MODEL: "whisper";

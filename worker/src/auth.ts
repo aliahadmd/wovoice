@@ -538,6 +538,12 @@ export async function handleAccountRoute(
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/v1/me")) return null;
   const principal = await authenticateAccess(request, env);
+  // Account routes were previously unthrottled; each request also writes
+  // activity rows, so a runaway token could drive unbounded D1 usage.
+  const rate = await env.USER_API_RATE_LIMITER.limit({ key: principal.userId });
+  if (!rate.success) {
+    throw new ApiError(429, "RATE_LIMITED", true, "Too many requests. Please wait a moment.", 60);
+  }
   if (request.method === "GET" && url.pathname === "/v1/me") {
     const user = await publicUser(env, principal.userId);
     const quota = await quotaSnapshot(env, principal.userId);
@@ -555,7 +561,12 @@ export async function handleAccountRoute(
   }
   if (request.method === "DELETE" && url.pathname.startsWith("/v1/me/sessions/")) {
     await requireActiveAccount(env, principal);
-    const sessionId = decodeURIComponent(url.pathname.slice("/v1/me/sessions/".length));
+    let sessionId: string;
+    try {
+      sessionId = decodeURIComponent(url.pathname.slice("/v1/me/sessions/".length));
+    } catch {
+      throw new ApiError(400, "INVALID_REQUEST", false, "The session id is malformed.");
+    }
     await env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE id = ? AND user_id = ?")
       .bind(Date.now(), sessionId, principal.userId)
       .run();

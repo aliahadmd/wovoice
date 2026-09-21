@@ -33,6 +33,13 @@ export async function handleSyncRoute(request: Request, env: AppEnv, requestId: 
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/v1/sync")) return null;
   const principal = await requireActiveAccount(env, await authenticateAccess(request, env));
+  // Sync routes were previously unthrottled; every pull also writes activity
+  // rows, so a runaway token could drive unbounded D1 usage. The ceiling is
+  // high enough that multi-page pull loops never hit it.
+  const rate = await env.USER_API_RATE_LIMITER.limit({ key: principal.userId });
+  if (!rate.success) {
+    throw new ApiError(429, "RATE_LIMITED", true, "Too many sync requests. Please wait a moment.", 60);
+  }
   if (request.method === "GET" && url.pathname === "/v1/sync/vault") {
     const row = await env.DB.prepare(
       "SELECT wrapped_vault_key, wrapped_vault_nonce, vault_key_version FROM users WHERE id = ?",
@@ -67,9 +74,17 @@ export async function handleSyncRoute(request: Request, env: AppEnv, requestId: 
     if (!current || current.vault_key_version !== expected) {
       throw new ApiError(409, "SYNC_CONFLICT", false, "The encrypted vault changed on another device.");
     }
-    await env.DB.prepare(
-      "UPDATE users SET wrapped_vault_key = ?, wrapped_vault_nonce = ?, vault_key_version = ? WHERE id = ?",
-    ).bind(wrappedKey, nonce, keyVersion, principal.userId).run();
+    // Guarded write: two devices rotating concurrently can both pass the
+    // check above, so the UPDATE itself carries the expectation. `IS ?` is a
+    // null-safe comparison, covering the first-creation case (NULL); the
+    // device whose expectation lost the race matches no row and surfaces the
+    // same conflict instead of silently destroying the winner's wrapped key.
+    const updated = await env.DB.prepare(
+      "UPDATE users SET wrapped_vault_key = ?, wrapped_vault_nonce = ?, vault_key_version = ? WHERE id = ? AND vault_key_version IS ?",
+    ).bind(wrappedKey, nonce, keyVersion, principal.userId, expected).run();
+    if (updated.meta.changes !== 1) {
+      throw new ApiError(409, "SYNC_CONFLICT", false, "The encrypted vault changed on another device.");
+    }
     return noStoreJson({ requestId, keyVersion });
   }
   if (request.method === "DELETE" && url.pathname === "/v1/sync/vault") {

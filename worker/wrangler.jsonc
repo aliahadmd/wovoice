@@ -49,6 +49,15 @@
         "limit": 5,
         "period": 60
       }
+    },
+    {
+      "//": "Guards /v1/me and /v1/sync; generous so multi-page pull loops pass.",
+      "name": "USER_API_RATE_LIMITER",
+      "namespace_id": "2026092101",
+      "simple": {
+        "limit": 240,
+        "period": 60
+      }
     }
   ],
   "vars": {

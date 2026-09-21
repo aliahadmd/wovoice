@@ -639,6 +639,7 @@ function fakeEnv(rateSuccess = true): AppEnv {
     EMAIL: {} as never,
     RATE_LIMITER: { limit: vi.fn(async () => ({ success: rateSuccess })) },
     AUTH_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) },
+    USER_API_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) },
     AI: {} as never,
     ASSETS: {} as never,
     ASR_MODEL: "whisper",
