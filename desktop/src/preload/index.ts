@@ -20,10 +20,16 @@ const api = {
   enableMicrophone: (): Promise<boolean> => ipcRenderer.invoke('permissions:enableMicrophone'),
   openAccessibilityPane: (): Promise<void> => ipcRenderer.invoke('permissions:openAccessibilityPane'),
   openListenPane: (): Promise<void> => ipcRenderer.invoke('permissions:openListenPane'),
-  settingsGet: (): Promise<{ keyboardShortcutEnabled: boolean; middleClickEnabled: boolean; workerUrl: string }> =>
-    ipcRenderer.invoke('settings:get'),
-  settingsSet: (key: 'keyboardShortcutEnabled' | 'middleClickEnabled', value: boolean): Promise<boolean> =>
-    ipcRenderer.invoke('settings:set', key, value),
+  settingsGet: (): Promise<{
+    keyboardShortcutEnabled: boolean
+    middleClickEnabled: boolean
+    triggerKey: string
+    workerUrl: string
+  }> => ipcRenderer.invoke('settings:get'),
+  settingsSet: (
+    key: 'keyboardShortcutEnabled' | 'middleClickEnabled' | 'triggerKey',
+    value: boolean | string
+  ): Promise<boolean> => ipcRenderer.invoke('settings:set', key, value),
   homeStats: (period: 'today' | '7d' | '30d' | 'all'): Promise<{
     dictations: number
     audioDurationMs: number
@@ -68,6 +74,17 @@ const api = {
     },
     onCancel: (listener: () => void): void => {
       ipcRenderer.on('overlay:cancel', () => listener())
+    },
+    onState: (
+      listener: (
+        state:
+          | { state: 'transcribing' }
+          | { state: 'success'; text: string; polished: boolean }
+          | { state: 'error'; message: string }
+          | { state: 'cancelled' }
+      ) => void
+    ): void => {
+      ipcRenderer.on('overlay:state', (_event, state) => listener(state))
     }
   }
 }

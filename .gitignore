@@ -22,6 +22,8 @@ local.properties
 *.p12
 /release
 build/
+!desktop/build/
+desktop/native/tapd
 /out
 /.v2c
 /.video_agent

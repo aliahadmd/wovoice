@@ -1,8 +1,8 @@
-import { app, shell, clipboard, BrowserWindow, Menu, Tray, ipcMain, systemPreferences } from 'electron'
+import { app, shell, clipboard, globalShortcut, BrowserWindow, Menu, Tray, ipcMain, systemPreferences, nativeImage } from 'electron'
 import { spawn } from 'child_process'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import icon from '../../resources/icon.png?asset'
+import trayTemplate from '../../resources/trayTemplate@2x.png?asset'
 import { SettingsStore } from './store'
 import { SessionStore } from './session'
 import { WorkerClient } from './worker'
@@ -89,6 +89,9 @@ const triggers = new TriggerEngine(
     },
     get middleClickEnabled() {
       return settings.get<boolean>('middleClickEnabled', false)
+    },
+    get triggerKey() {
+      return settings.get<string>('triggerKey', 'option')
     }
   },
   (): void => dictation.begin(),
@@ -101,6 +104,7 @@ function broadcastAuthState(extra: Record<string, unknown> = {}): void {
     email: settings.get<string | null>('accountEmail', null),
     ...extra
   })
+  rebuildTrayMenu()
 }
 
 function startSignIn(): void {
@@ -180,20 +184,37 @@ function showDashboard(): void {
   else dashboard.show()
 }
 
-function createTray(): void {
-  tray = new Tray(icon)
-  tray.setToolTip('WoVoice')
+function rebuildTrayMenu(): void {
+  if (tray === null || tray.isDestroyed()) return
+  const email = settings.get<string | null>('accountEmail', null)
+  const signedIn = session.hasRefreshToken
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: 'WoVoice dashboard', click: showDashboard },
-      { label: 'Sign in…', click: startSignIn },
+      signedIn
+        ? { label: email ?? 'Signed in', enabled: false }
+        : { label: 'Sign in…', click: startSignIn },
+      ...(signedIn ? [{ label: 'Sign out', click: (): void => { void signOut() } }] : []),
       { type: 'separator' },
-      { label: 'Quit WoVoice', click: (): void => {
-        triggers.unregister()
-        app.quit()
-      } }
+      {
+        label: 'Quit WoVoice',
+        click: (): void => {
+          triggers.unregister()
+          app.quit()
+        }
+      }
     ])
   )
+}
+
+function createTray(): void {
+  // Monochrome waveform template image — macOS tints it for dark/light menu
+  // bars. Rendered at 16pt from the @2x asset; the color icon is Dock-only.
+  const trayImage = nativeImage.createFromPath(trayTemplate).resize({ width: 16, height: 16 })
+  trayImage.setTemplateImage(true)
+  tray = new Tray(trayImage)
+  tray.setToolTip('WoVoice')
+  rebuildTrayMenu()
   tray.on('click', showDashboard)
 }
 
@@ -252,13 +273,17 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:get', () => ({
     keyboardShortcutEnabled: settings.get<boolean>('keyboardShortcutEnabled', true),
     middleClickEnabled: settings.get<boolean>('middleClickEnabled', false),
+    triggerKey: settings.get<string>('triggerKey', 'option'),
     workerUrl: settings.workerUrl
   }))
-  ipcMain.handle('settings:set', (_event, key: string, value: boolean) => {
-    if (key !== 'keyboardShortcutEnabled' && key !== 'middleClickEnabled') return false
+  ipcMain.handle('settings:set', (_event, key: string, value: boolean | string) => {
+    if (key !== 'keyboardShortcutEnabled' && key !== 'middleClickEnabled' && key !== 'triggerKey') {
+      return false
+    }
     settings.set(key, value)
     if (key === 'keyboardShortcutEnabled' && value) triggers.registerIfMissing()
     if (key === 'middleClickEnabled' && value) triggers.registerIfMissing()
+    if (key === 'triggerKey') triggers.restart()
     return true
   })
   ipcMain.handle('triggers:status', () => triggers.isRegistered())
@@ -305,9 +330,10 @@ app.whenReady().then(() => {
 
 
   ipcMain.on('overlay:done', (_event, payload: { wav: ArrayBuffer; durationMs: number; containsSpeech: boolean }) => {
+    console.log('[overlay] done received:', payload.durationMs, 'ms, speech =', payload.containsSpeech)
     void dictation.handleCapture(payload)
   })
-  ipcMain.on('overlay:cancelled', () => dictation.cancel())
+  ipcMain.on('overlay:cancelled', () => dictation.cancelUser())
   ipcMain.on('overlay:fail', (_event, message: string) => dictation.fail(message))
   ipcMain.on('overlay:label', () => {
     // The overlay owns its label during capture; forwarded updates ignored in v1.
@@ -315,7 +341,13 @@ app.whenReady().then(() => {
 
   triggers.register()
   createDashboard()
-  createTray()
+  try {
+    createTray()
+  } catch (error) {
+    // Cosmetic — a tray failure must never take down dictation setup.
+    console.error('[tray] failed:', error)
+  }
+  dictation.prepare()
 
   app.on('activate', () => {
     showDashboard()
@@ -352,6 +384,10 @@ function routeDeepLink(value: string): void {
   desktopAuth?.handleExternalCallback(code, state)
   showDashboard()
 }
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll()
+})
 
 app.on('window-all-closed', () => {
   // Tray keeps the app alive on macOS; quit only via the tray menu.

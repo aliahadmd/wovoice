@@ -9,6 +9,9 @@ export class SpeechSignalDetector {
   private totalSquares = 0
   private peakFrameRms = 0
 
+  /** Defaults to the phone's 16 kHz pipeline; pass the live rate otherwise. */
+  constructor(private readonly sampleRate: number = 16_000) {}
+
   /** Consumes one frame of Float32 samples (-1..1); returns its RMS (0..1). */
   observe(samples: Float32Array): number {
     let squares = 0
@@ -28,8 +31,8 @@ export class SpeechSignalDetector {
     peakRms: number
     averageRms: number
   } {
-    const durationMs = (this.totalSamples / SAMPLE_RATE) * 1000
-    const activeMs = (this.activeSamples / SAMPLE_RATE) * 1000
+    const durationMs = (this.totalSamples / this.sampleRate) * 1000
+    const activeMs = (this.activeSamples / this.sampleRate) * 1000
     const averageRms =
       this.totalSamples === 0 ? 0 : Math.sqrt(this.totalSquares / this.totalSamples)
     return {
@@ -45,7 +48,6 @@ export class SpeechSignalDetector {
   }
 }
 
-const SAMPLE_RATE = 16_000
 const MIN_RECORDING_MS = 250
 const MIN_ACTIVE_MS = 120
 // ~-56.5 dBFS: rejects near-zero captures without mistaking a low-gain

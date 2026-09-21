@@ -11,11 +11,16 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+extraResources:
+  - from: native/tapd
+    to: tapd
 protocols:
   - name: WoVoice
     schemes: [wovoice]
 mac:
   category: public.app-category.productivity
+  identity: "Apple Development: aliahadmd1@gmail.com (J9N3B2KAPR)"
+  hardenedRuntime: false
   target:
     - target: dmg
     - target: dir

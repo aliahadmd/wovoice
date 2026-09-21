@@ -26,8 +26,18 @@ interface Permissions {
 interface Settings {
   keyboardShortcutEnabled: boolean
   middleClickEnabled: boolean
+  triggerKey: string
   workerUrl: string
 }
+
+const TRIGGER_KEY_OPTIONS: Array<{ id: string; label: string }> = [
+  { id: 'option', label: '⌥ Left Option (default)' },
+  { id: 'option-right', label: '⌥ Right Option' },
+  { id: 'command', label: '⌘ Left Command' },
+  { id: 'command-right', label: '⌘ Right Command' },
+  { id: 'caps-lock', label: '⇪ Caps Lock' },
+  { id: 'fn', label: '🌐 Fn / Globe' }
+]
 
 interface HomeStats {
   dictations: number
@@ -231,7 +241,30 @@ function Dashboard(): React.JSX.Element {
             <div className="card">
               <h2>Dictation triggers</h2>
               <div className="stat-row">
-                <span className="label">Hold ⌥ Option to dictate</span>
+                <span className="label">Hold-to-talk key</span>
+                <select
+                  className="select"
+                  value={settings?.triggerKey ?? 'option'}
+                  onChange={(event) => {
+                    if (settings === null) return
+                    const next = event.target.value
+                    setSettings({ ...settings, triggerKey: next })
+                    void window.api.settingsSet('triggerKey', next)
+                  }}
+                >
+                  {TRIGGER_KEY_OPTIONS.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <p className="hint">
+                Hold the key and speak; release to insert. A quick tap latches — tap again to stop.
+                Only the chosen key starts dictation; typing is never affected.
+              </p>
+              <div className="stat-row">
+                <span className="label">Keyboard trigger enabled</span>
                 <button
                   className={`action ${settings?.keyboardShortcutEnabled ? '' : 'secondary'}`}
                   onClick={() => toggle('keyboardShortcutEnabled')}
@@ -250,22 +283,42 @@ function Dashboard(): React.JSX.Element {
               </div>
             </div>
             <div className="card">
-              <h2>Permissions</h2>
+              <h2>Permissions &amp; access</h2>
+              <p className="hint">
+                WoVoice asks for exactly two macOS permissions — the same ones Wispr Flow
+                needs. Nothing else: it never reads your screen, files, or browsing. Both are
+                granted once and stay.
+              </p>
               <div className="stat-row">
-                <span className="label">Microphone</span>
+                <span className="label">
+                  <strong>1 · Microphone</strong> — to hear you while you dictate
+                </span>
                 <span className="value">{permissions === null ? 'checking…' : permissions.mic}</span>
               </div>
+              <p className="hint">
+                Audio is captured only while the bubble is recording, sent to your WoVoice
+                service for transcription, then discarded. It is never stored on the server.
+              </p>
               <p>
                 <button className="action" onClick={enableMicrophone}>
                   Enable microphone
                 </button>
               </p>
               <div className="stat-row">
-                <span className="label">Paste (accessibility)</span>
+                <span className="label">
+                  <strong>2 · Device Control &amp; Data Access</strong> — for the trigger key and
+                  pasting
+                </span>
                 <span className="value">
                   {permissions === null ? 'checking…' : permissions.accessibility ? 'granted' : 'not granted'}
                 </span>
               </div>
+              <p className="hint">
+                This is the Accessibility permission (System Settings → Privacy &amp; Security →
+                Device Control &amp; Data Access). It lets WoVoice watch for your chosen trigger
+                key in any app and paste the finished text at your cursor. It does not read your
+                screen or send anything anywhere.
+              </p>
               <p>
                 <button
                   className="action secondary"
@@ -274,26 +327,14 @@ function Dashboard(): React.JSX.Element {
                     refreshPermissions()
                   }}
                 >
-                  Open accessibility settings
+                  Open the permission pane
                 </button>
               </p>
               <div className="stat-row">
-                <span className="label">Global input events (middle-click)</span>
-                <span className="value">
-                  {settings === null ? '—' : settings.middleClickEnabled ? 'requires grant' : 'not used while off'}
-                </span>
+                <span className="label">Input Monitoring</span>
+                <span className="value">not needed</span>
               </div>
-              <p>
-                <button
-                  className="action secondary"
-                  onClick={() => {
-                    void window.api.openListenPane()
-                    refreshPermissions()
-                  }}
-                >
-                  Open input monitoring settings
-                </button>
-              </p>
+              <p className="hint">WoVoice deliberately avoids this permission entirely.</p>
             </div>
             <div className="card">
               <h2>Startup</h2>

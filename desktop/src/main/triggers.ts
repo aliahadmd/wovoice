@@ -1,22 +1,44 @@
-import { uIOhook, UiohookKey } from 'uiohook-napi'
+import { spawn, ChildProcess } from 'child_process'
+import { existsSync } from 'fs'
+import { join } from 'path'
 
 type Trigger = 'keyboard' | 'middle-click'
 
 interface TriggerSettings {
   keyboardShortcutEnabled: boolean
   middleClickEnabled: boolean
+  triggerKey: string
 }
 
+// Raw macOS virtual keycodes (kVK_*) for each selectable trigger key.
+const TRIGGER_KEY_CODES: Record<string, number[]> = {
+  option: [58], // left Option — default
+  'option-right': [61],
+  command: [55], // left Command
+  'command-right': [54],
+  'caps-lock': [57],
+  fn: [63] // Globe key
+}
+
+// CGEvent mouse button number for the center/middle button.
+const MOUSE_MIDDLE = 2
+
 /**
- * Global triggers via a CGEventTap (JNativeHook lineage): hold ⌥ to dictate,
- * quick-tap to latch (start; tap again to stop), and hold middle-click for the
- * same. Requires the Input Monitoring grant; events are not suppressed, which
- * is why the default key is one with no text side-effect.
+ * Global triggers via tapd, the bundled self-healing event-tap helper:
+ * hold the configured trigger key to dictate, quick-tap to latch (start; tap
+ * again to stop), and hold middle-click for the same. Runs as a child process
+ * so macOS's tap-timeout disablement can never silently kill dictation — the
+ * helper re-enables its own tap. Needs only the Accessibility (Device Control
+ * & Data Access) grant; events are not suppressed.
  */
 export class TriggerEngine {
   private lock = false
   private keyDownAt = 0
   private keyboardLatched = false
+  private triggerDown = false
+  private latchStopPress = false
+  private helper: ChildProcess | null = null
+  private activeCodes: number[] = []
 
   constructor(
     private readonly settings: TriggerSettings,
@@ -24,41 +46,77 @@ export class TriggerEngine {
     private readonly onStop: (trigger: Trigger) => void
   ) {}
 
-  private registered = false
+  private codes(): number[] {
+    const preset = TRIGGER_KEY_CODES[this.settings.triggerKey] ?? TRIGGER_KEY_CODES.option
+    return [...preset]
+  }
+
+  private helperPath(): string {
+    const packaged = join(process.resourcesPath, 'tapd')
+    if (existsSync(packaged)) return packaged
+    return join(__dirname, '../../native/tapd')
+  }
 
   register(): void {
-    if (this.registered) return
+    if (this.helper !== null) return
+    this.activeCodes = this.codes()
     try {
-      uIOhook.on('keydown', (event) => {
-        console.log('[trigger] keydown', event.keycode)
-        this.onKeyDown(Number(event.keycode))
+      const child = spawn(this.helperPath(), this.activeCodes.map(String), {
+        stdio: ['pipe', 'pipe', 'pipe']
       })
-      uIOhook.on('keyup', (event) => this.onKeyUp(Number(event.keycode)))
-      uIOhook.on('mousedown', (event) => {
-        console.log('[trigger] mousedown', event.button)
-        this.onMouseDown(Number(event.button))
+      child.stdout?.setEncoding('utf-8')
+      child.stdout?.on('data', (chunk: string) => {
+        for (const line of chunk.split('\n')) {
+          const [kind, value, state] = line.trim().split(' ')
+          if (kind === 'k') this.onKeyLine(Number(value), state === '1')
+          else if (kind === 'm') this.onMouseLine(Number(value), state === '1')
+        }
       })
-      uIOhook.on('mouseup', (event) => this.onMouseUp(Number(event.button)))
-      uIOhook.start()
-      this.registered = true
+      child.stderr?.on('data', (chunk: Buffer) => {
+        const text = chunk.toString().trim()
+        if (text.length > 0) console.log('[trigger][tapd]', text)
+      })
+      child.on('exit', (code) => {
+        if (this.helper === child) {
+          this.helper = null
+          console.log('[trigger] tapd exited with code', code)
+        }
+      })
+      this.helper = child
+      console.log('[trigger] tap started (tapd), keycodes', this.activeCodes.join(','))
     } catch (error) {
       console.error('[trigger] registration failed:', error)
-      this.registered = false
+      this.helper = null
     }
   }
 
+  restart(): void {
+    this.unregister()
+    this.register()
+  }
+
   isRegistered(): boolean {
-    return this.registered
+    return this.helper !== null && this.helper.exitCode === null
   }
 
   registerIfMissing(): void {
-    if (!this.registered) this.register()
+    if (!this.isRegistered()) this.register()
   }
 
   unregister(): void {
-    if (!this.registered) return
-    uIOhook.stop()
-    this.registered = false
+    if (this.helper === null) return
+    this.helper.kill()
+    this.helper = null
+  }
+
+  private onKeyLine(keycode: number, down: boolean): void {
+    if (down) this.onKeyDown(keycode)
+    else this.onKeyUp(keycode)
+  }
+
+  private onMouseLine(button: number, down: boolean): void {
+    if (down) this.onMouseDown(button)
+    else this.onMouseUp(button)
   }
 
   private tryStart(trigger: Trigger): boolean {
@@ -76,16 +134,18 @@ export class TriggerEngine {
   }
 
   private onKeyDown(keycode: number): void {
-    // Trigger keys: Option (56/58) or Command (3675) — both have no text
-    // side-effect when held and released alone.
-    if (
-      !this.settings.keyboardShortcutEnabled ||
-      (keycode !== UiohookKey.Alt && keycode !== 58 && keycode !== UiohookKey.Meta && keycode !== 88)
-    ) {
+    if (!this.settings.keyboardShortcutEnabled || !this.activeCodes.includes(keycode)) {
       return
     }
+    // Key auto-repeat fires extra keydowns while the key is held: only the
+    // first one opens a session, so the last repeat can't be mistaken for a
+    // quick tap at release time.
+    if (this.triggerDown) return
+    this.triggerDown = true
     if (this.keyboardLatched) {
       this.keyboardLatched = false
+      // This press IS the stop tap — its keyup must not start a new latch.
+      this.latchStopPress = true
       this.tryStop('keyboard')
       return
     }
@@ -94,15 +154,17 @@ export class TriggerEngine {
   }
 
   private onKeyUp(keycode: number): void {
-    // Trigger keys: Option (56/58) or Command (3675) — both have no text
-    // side-effect when held and released alone.
-    if (
-      !this.settings.keyboardShortcutEnabled ||
-      (keycode !== UiohookKey.Alt && keycode !== 58 && keycode !== UiohookKey.Meta && keycode !== 88)
-    ) {
+    if (!this.settings.keyboardShortcutEnabled || !this.activeCodes.includes(keycode)) {
       return
     }
+    if (!this.triggerDown) return
+    this.triggerDown = false
     if (this.keyboardLatched) return
+    if (this.latchStopPress) {
+      // Releasing the tap that stopped a latched session — do nothing.
+      this.latchStopPress = false
+      return
+    }
     const held = Date.now() - this.keyDownAt
     if (held < 300) {
       // Quick tap: keep recording in latch mode until the next tap.
@@ -113,12 +175,12 @@ export class TriggerEngine {
   }
 
   private onMouseDown(button: number): void {
-    if (!this.settings.middleClickEnabled || button !== 3) return
+    if (!this.settings.middleClickEnabled || button !== MOUSE_MIDDLE) return
     this.tryStart('middle-click')
   }
 
   private onMouseUp(button: number): void {
-    if (!this.settings.middleClickEnabled || button !== 3) return
+    if (!this.settings.middleClickEnabled || button !== MOUSE_MIDDLE) return
     this.tryStop('middle-click')
   }
 }

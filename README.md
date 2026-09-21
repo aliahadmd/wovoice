@@ -401,6 +401,52 @@ The destination app controls the requested editor action. WoVoice follows that r
 - The manual keyboard has no autocorrect or word-suggestion strip.
 - Cost and neuron figures are estimates for WoVoice requests, not actual account billing.
 
+## macOS desktop app
+
+WoVoice is also available as a native macOS dictation app: hold a key anywhere,
+speak, release, and the polished text is pasted at your cursor — the same
+worker pipeline, account, quota, and end-to-end encrypted history sync as the
+phone keyboard.
+
+### Install on a new Mac
+
+1. Download `wovoice-desktop-*.dmg` from
+   [Releases](https://github.com/aliahadmd/wovoice/releases/latest), open it,
+   and drag **WoVoice** into **Applications**.
+2. Launch WoVoice. On first run it asks for exactly **two permissions** (the
+   same ones Wispr Flow needs — nothing more):
+   - **Microphone** — to capture your voice while the bubble records. Audio is
+     sent to your WoVoice service for transcription and never stored there.
+   - **Device Control & Data Access** (System Settings → Privacy & Security) —
+     lets WoVoice watch for your trigger key in any app and paste the finished
+     text. It never reads your screen. Input Monitoring is deliberately *not*
+     required.
+3. Sign in once from the **Account** tab (email OTP in your browser). Your
+   phone's dictation history syncs end-to-end encrypted when you paste your
+   recovery key.
+
+### Using it
+
+- **Hold ⌥ Option**, speak, release — text is inserted at your cursor.
+- A **quick tap latches** hands-free mode; tap again to stop. Middle-click
+  hold is also available.
+- The animated bubble shows every stage: recording waveform → uploading →
+  transcribing → inserted (or the exact error).
+- Choose a different trigger key (right ⌥, ⌘, Caps Lock, 🌐 Fn) and toggle
+  sounds from **Settings**.
+
+### Building from source
+
+```bash
+cd desktop
+npm install
+npm run build:mac   # -> dist/wovoice-desktop-<version>.dmg
+```
+
+The tap trigger helper (`native/tapd.c`) is compiled automatically; the app is
+signed with your Apple Development identity so permission grants survive
+rebuilds.
+
 ## License
 
 WoVoice is proprietary source-available software. Its source code may be viewed

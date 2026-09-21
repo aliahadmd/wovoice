@@ -1,7 +1,8 @@
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, globalShortcut, screen } from 'electron'
 import { join } from 'path'
 import { WorkerError } from './worker'
 import { pasteText } from './insert'
+import { playSound } from './sounds'
 
 export interface DictationDeps {
   settings: { workerUrl: string }
@@ -21,9 +22,20 @@ export interface DictationDeps {
   }) => void
 }
 
+export type OverlayState =
+  | { state: 'transcribing' }
+  | { state: 'success'; text: string; polished: boolean }
+  | { state: 'error'; message: string }
+  | { state: 'cancelled' }
+
+// Pill visibility windows (the renderer mirrors these for its exit animation).
+const SUCCESS_VISIBLE_MS = 2200
+const ERROR_VISIBLE_MS = 3600
+
 /**
  * Owns the overlay window and the dictation state machine:
  * begin → overlay records → end → WAV → transcribe → paste → result label.
+ * Every transition is surfaced on the pill (animated) and with a sound.
  */
 export class DictationService {
   private overlay: BrowserWindow | null = null
@@ -34,12 +46,15 @@ export class DictationService {
 
   private ensureOverlay(): BrowserWindow {
     if (this.overlay !== null && !this.overlay.isDestroyed()) return this.overlay
+    const { workArea } = screen.getPrimaryDisplay()
+    const width = 580
+    const height = 120
     this.overlay = new BrowserWindow({
-      width: 460,
-      height: 96,
+      width,
+      height,
       show: false,
-      x: 0,
-      y: 64,
+      x: workArea.x + Math.round((workArea.width - width) / 2),
+      y: workArea.y + 56,
       frame: false,
       transparent: true,
       resizable: false,
@@ -54,49 +69,106 @@ export class DictationService {
         sandbox: false
       }
     })
-    this.overlay.setPosition(0, 64)
     void this.overlay.loadFile(join(__dirname, '../renderer/overlay.html'))
     return this.overlay
   }
 
+  /** Load the overlay page at startup so the first dictation isn't lost. */
+  prepare(): void {
+    this.ensureOverlay()
+  }
+
+  /** ⌥Space hotkey: tap toggles (start; tap again to stop). */
+  toggle(): void {
+    if (this.recording) this.end()
+    else if (!this.processing) this.begin()
+  }
+
   begin(): void {
     if (this.recording || this.processing) return
+    console.log('[dictation] begin')
     const overlay = this.ensureOverlay()
     overlay.showInactive()
     this.recording = true
-    this.label('Listening… (release or tap to stop)')
-    overlay.webContents.send('overlay:begin')
+    playSound('start')
+    this.sendToOverlay(overlay, 'overlay:begin')
+    // Esc cancels the in-flight recording (a global grab for a few seconds).
+    const escOk = globalShortcut.register('Escape', () => this.cancelUser())
+    console.log('[dictation] esc-to-cancel registered:', escOk)
   }
 
   end(): void {
     if (!this.recording) return
+    console.log('[dictation] end — requesting WAV')
     this.recording = false
     this.processing = true
-    this.label('Transcribing…')
-    this.overlay?.webContents.send('overlay:end')
+    this.releaseEscape()
+    playSound('stop')
+    if (this.overlay !== null) this.sendToOverlay(this.overlay, 'overlay:end')
+  }
+
+  cancelUser(): void {
+    if (this.recording) {
+      console.log('[dictation] cancelled by user')
+      this.recording = false
+      this.releaseEscape()
+      playSound('cancel')
+      this.overlay?.webContents.send('overlay:state', {
+        state: 'cancelled'
+      } satisfies OverlayState)
+      this.hideAfter(1600)
+    }
   }
 
   cancel(): void {
     this.recording = false
     this.processing = false
+    this.releaseEscape()
     this.hide()
   }
 
   fail(message: string): void {
+    console.log('[dictation] fail:', message)
     this.processing = false
     this.recording = false
-    this.label(message)
-    setTimeout(() => {
-      if (!this.recording && !this.processing) this.hide()
-    }, 3200)
+    this.releaseEscape()
+    playSound('error')
+    this.overlay?.webContents.send('overlay:state', {
+      state: 'error',
+      message
+    } satisfies OverlayState)
+    this.hideAfter(ERROR_VISIBLE_MS)
   }
 
-  private label(text: string): void {
-    this.overlay?.webContents.send('overlay:label', text)
+  private sendState(state: OverlayState): void {
+    this.overlay?.webContents.send('overlay:state', state)
+  }
+
+  private releaseEscape(): void {
+    if (globalShortcut.isRegistered('Escape')) globalShortcut.unregister('Escape')
   }
 
   private hide(): void {
     this.overlay?.hide()
+  }
+
+  private hideAfter(ms: number): void {
+    setTimeout(() => {
+      if (!this.recording && !this.processing) this.hide()
+    }, ms)
+  }
+
+  /**
+   * The window is created lazily on first use; a send during page load is
+   * silently dropped, which would swallow the whole first dictation.
+   */
+  private sendToOverlay(overlay: BrowserWindow, channel: string): void {
+    const webContents = overlay.webContents
+    if (webContents.isLoading()) {
+      webContents.once('did-finish-load', () => webContents.send(channel))
+    } else {
+      webContents.send(channel)
+    }
   }
 
   /** Called by the overlay once its WAV is ready. */
@@ -106,15 +178,21 @@ export class DictationService {
     containsSpeech: boolean
   }): Promise<void> {
     try {
+      console.log(
+        '[dictation] capture received:',
+        payload.durationMs, 'ms, speech =', payload.containsSpeech
+      )
       if (!payload.containsSpeech) {
-        this.finishWith('No clear speech — try again', true)
+        this.fail('No clear speech detected — try holding ⌥ a little longer')
         return
       }
-      this.label('Transcribing…')
+      this.sendState({ state: 'transcribing' })
       const token = await this.deps.getToken()
       const glossary = await this.deps.getGlossary()
       const outcome = await this.deps.transcribe(token, Buffer.from(payload.wav), glossary)
+      console.log('[dictation] transcribed:', JSON.stringify(outcome.text))
       await pasteText(outcome.text)
+      console.log('[dictation] pasted')
       this.deps.recordHistory({
         text: outcome.text,
         asrModel: outcome.asrModel,
@@ -122,22 +200,22 @@ export class DictationService {
         durationMs: payload.durationMs,
         polished: outcome.polished
       })
-      this.finishWith(`✓ ${outcome.text.slice(0, 140)}`, false)
+      this.processing = false
+      playSound('success')
+      this.sendState({
+        state: 'success',
+        text: outcome.text.slice(0, 160),
+        polished: outcome.polished
+      })
+      this.hideAfter(SUCCESS_VISIBLE_MS)
     } catch (error) {
+      console.error('[dictation] failed:', error)
       if (error instanceof WorkerError && (error.code === 'AUTH_REQUIRED' || error.code === 'HTTP_401')) {
-        this.finishWith('Sign in to use voice dictation', true)
+        this.fail('Sign in to use voice dictation')
         return
       }
-      const message = error instanceof WorkerError ? error.message : 'Dictation error'
-      this.finishWith(message, true)
+      const message = error instanceof WorkerError ? error.message : 'Dictation error — try again'
+      this.fail(message)
     }
-  }
-
-  private finishWith(message: string, isError: boolean): void {
-    this.processing = false
-    this.label(message)
-    setTimeout(() => {
-      if (!this.recording && !this.processing) this.hide()
-    }, isError ? 3200 : 2000)
   }
 }

@@ -300,3 +300,32 @@ button {
   white-space: nowrap;
   max-width: 70%;
 }
+
+.hint {
+  margin: 4px 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim, rgba(240, 240, 245, 0.55));
+}
+
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 6px 26px 6px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background:
+    url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23aaa' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E")
+    no-repeat right 10px center,
+    rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.select:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.select option {
+  background: #1c1c22;
+  color: #f0f0f5;
+}

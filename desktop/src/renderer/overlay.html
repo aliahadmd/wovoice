@@ -14,63 +14,331 @@
         height: 100%;
         background: transparent;
         overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+        -webkit-user-select: none;
+        user-select: none;
       }
-      .pill {
-        box-sizing: border-box;
-        width: 100vw;
+
+      .stage {
         height: 100vh;
         display: flex;
-        align-items: center;
-        gap: 14px;
-        padding: 0 22px;
-        background: rgba(0, 0, 0, 0.72);
-        border: 1px solid rgba(125, 228, 182, 0.2);
-        border-radius: 22px;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 8px;
+        box-sizing: border-box;
       }
-      .bars {
+
+      .pill {
+        box-sizing: border-box;
         display: flex;
         align-items: center;
-        gap: 6px;
-        height: 56px;
+        gap: 12px;
+        max-width: 548px;
+        min-height: 58px;
+        padding: 12px 16px;
+        border-radius: 18px;
+        background: rgba(18, 18, 22, 0.82);
+        -webkit-backdrop-filter: blur(24px) saturate(1.4);
+        backdrop-filter: blur(24px) saturate(1.4);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+        color: #f5f4f7;
+        opacity: 0;
+        transform: scale(0.85) translateY(-8px);
+        transition:
+          opacity 0.22s ease,
+          transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.18),
+          border-color 0.25s ease;
+      }
+      .pill.show {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+      }
+      .pill.closing {
+        opacity: 0;
+        transform: scale(0.9) translateY(-6px);
+        transition:
+          opacity 0.3s ease,
+          transform 0.3s ease;
+      }
+      .pill[data-tone='error'] {
+        border-color: rgba(255, 176, 82, 0.45);
+      }
+      .pill[data-tone='success'] {
+        border-color: rgba(125, 228, 182, 0.4);
+      }
+
+      /* ---- recording dot ---- */
+      .rec-dot {
+        display: none;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #ff5d5d;
+        flex: none;
+        animation: dotPulse 1.6s ease-out infinite;
+      }
+      body[data-state='recording'] .rec-dot {
+        display: block;
+      }
+      @keyframes dotPulse {
+        0% {
+          box-shadow: 0 0 0 0 rgba(255, 93, 93, 0.55);
+        }
+        70% {
+          box-shadow: 0 0 0 9px rgba(255, 93, 93, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(255, 93, 93, 0);
+        }
+      }
+
+      /* ---- waveform ---- */
+      .bars {
+        display: none;
+        align-items: center;
+        gap: 3px;
+        height: 34px;
+        flex: none;
+      }
+      body[data-state='recording'] .bars {
+        display: flex;
       }
       .bar {
-        width: 4px;
+        width: 3px;
+        height: 5px;
         border-radius: 2px;
-        background: #7de4b6;
-        height: 14px;
+        background: linear-gradient(180deg, #9df0cd, #59c7f0);
+        transition: height 70ms ease;
       }
-      .label {
+
+      /* ---- timer ---- */
+      .timer {
+        display: none;
+        font-variant-numeric: tabular-nums;
+        font-size: 12px;
+        color: rgba(245, 244, 247, 0.6);
+        flex: none;
+      }
+      body[data-state='recording'] .timer,
+      body[data-state='processing'] .timer {
+        display: block;
+      }
+
+      /* ---- text ---- */
+      .content {
         flex: 1;
-        color: #f7f6f8;
-        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        min-width: 0;
+      }
+      .state-line {
         font-size: 13px;
-        line-height: 1.3;
+        font-weight: 500;
+        line-height: 1.35;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .cancel {
-        width: 26px;
-        height: 26px;
+      .sub-line {
+        display: none;
+        margin-top: 2px;
+        font-size: 11.5px;
+        color: rgba(245, 244, 247, 0.55);
+        line-height: 1.35;
+      }
+      body[data-state='recording'] .sub-line,
+      body[data-state='success'] .sub-line,
+      body[data-state='error'] .sub-line {
+        display: block;
+      }
+      body[data-state='success'] .state-line,
+      body[data-state='error'] .state-line {
+        white-space: normal;
+        display: block;
+      }
+
+      /* processing shimmer on the state text */
+      body[data-state='processing'] .state-line {
+        background: linear-gradient(
+          90deg,
+          rgba(245, 244, 247, 0.55) 0%,
+          #ffffff 45%,
+          rgba(245, 244, 247, 0.55) 90%
+        );
+        background-size: 200% 100%;
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        animation: shimmer 1.5s linear infinite;
+        display: block;
+      }
+      @keyframes shimmer {
+        from {
+          background-position: 130% 0;
+        }
+        to {
+          background-position: -70% 0;
+        }
+      }
+
+      /* thinking dots */
+      .dots {
+        display: none;
+        align-items: center;
+        gap: 4px;
+        flex: none;
+      }
+      body[data-state='processing'] .dots {
+        display: flex;
+      }
+      .dots i {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: #9df0cd;
+        animation: dotWave 1.2s ease-in-out infinite;
+      }
+      .dots i:nth-child(2) {
+        animation-delay: 0.15s;
+      }
+      .dots i:nth-child(3) {
+        animation-delay: 0.3s;
+      }
+      @keyframes dotWave {
+        0%,
+        60%,
+        100% {
+          transform: translateY(0);
+          opacity: 0.45;
+        }
+        30% {
+          transform: translateY(-5px);
+          opacity: 1;
+        }
+      }
+
+      /* success check */
+      .check {
+        display: none;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: rgba(125, 228, 182, 0.18);
+        color: #7de4b6;
+        font-size: 13px;
+        line-height: 22px;
+        text-align: center;
+        flex: none;
+      }
+      body[data-state='success'] .check {
+        display: block;
+        animation: popIn 0.4s cubic-bezier(0.2, 1.4, 0.4, 1);
+      }
+      @keyframes popIn {
+        from {
+          transform: scale(0.3);
+          opacity: 0;
+        }
+        to {
+          transform: scale(1);
+          opacity: 1;
+        }
+      }
+      .chip {
+        display: inline-block;
+        margin-left: 8px;
+        padding: 1px 7px;
+        border-radius: 8px;
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        background: rgba(157, 240, 205, 0.16);
+        color: #9df0cd;
+        vertical-align: 1px;
+      }
+
+      /* error tone */
+      body[data-state='error'] .state-line {
+        color: #ffcf9a;
+      }
+      body[data-state='error'] .pill {
+        animation: shake 0.36s ease;
+      }
+      @keyframes shake {
+        0%,
+        100% {
+          transform: translateX(0) scale(1);
+        }
+        25% {
+          transform: translateX(-5px);
+        }
+        55% {
+          transform: translateX(4px);
+        }
+        80% {
+          transform: translateX(-2px);
+        }
+      }
+      .warn-icon {
+        display: none;
+        flex: none;
+        font-size: 15px;
+      }
+      body[data-state='error'] .warn-icon {
+        display: block;
+      }
+
+      /* ---- close button ---- */
+      .close {
+        display: none;
+        width: 24px;
+        height: 24px;
         border: none;
         border-radius: 50%;
-        background: rgba(255, 255, 255, 0.14);
-        color: #f7f6f8;
-        font-size: 14px;
+        background: rgba(255, 255, 255, 0.12);
+        color: #f5f4f7;
+        font-size: 12px;
         cursor: pointer;
+        flex: none;
+        padding: 0;
+      }
+      .close:hover {
+        background: rgba(255, 255, 255, 0.22);
+      }
+      body[data-state='recording'] .close,
+      body[data-state='error'] .close {
+        display: block;
+      }
+
+      kbd {
+        display: inline-block;
+        padding: 0 5px;
+        border-radius: 5px;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        background: rgba(255, 255, 255, 0.08);
+        font-family: inherit;
+        font-size: 10.5px;
+        line-height: 15px;
       }
     </style>
   </head>
-  <body>
-    <div class="pill">
-      <div class="bars" id="bars">
-        <div class="bar"></div>
-        <div class="bar"></div>
-        <div class="bar"></div>
-        <div class="bar"></div>
-        <div class="bar"></div>
+  <body data-state="idle">
+    <div class="stage">
+      <div class="pill" id="pill">
+        <div class="rec-dot" id="recDot"></div>
+        <div class="bars" id="bars"></div>
+        <div class="check" id="check">✓</div>
+        <div class="warn-icon" id="warn">⚠️</div>
+        <div class="dots" id="dots"><i></i><i></i><i></i></div>
+        <div class="content">
+          <div class="state-line" id="stateLine">Listening…</div>
+          <div class="sub-line" id="subLine"></div>
+        </div>
+        <div class="timer" id="timer">0:00</div>
+        <button class="close" id="cancel" title="Cancel dictation">✕</button>
       </div>
-      <div class="label" id="label">Listening… (release to transcribe)</div>
-      <button class="cancel" id="cancel" title="Cancel">✕</button>
     </div>
     <script type="module" src="/src/overlay/overlay.ts"></script>
   </body>
