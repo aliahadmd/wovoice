@@ -4,13 +4,11 @@
  * the caller before encoding).
  */
 export function encodeWav(samples: Float32Array, sourceRate: number): ArrayBuffer {
-  const factor = Math.max(1, Math.floor(sourceRate / TARGET_RATE))
-  const outSamples = Math.floor(samples.length / factor)
+  const pcm16k = resample(samples, sourceRate, TARGET_RATE)
+  const outSamples = pcm16k.length
   const pcm = new Int16Array(outSamples)
   for (let i = 0; i < outSamples; i++) {
-    let sum = 0
-    for (let j = 0; j < factor; j++) sum += samples[i * factor + j]
-    const scaled = (sum / factor) * 32768
+    const scaled = pcm16k[i] * 32768
     pcm[i] = Math.max(-32768, Math.min(32767, Math.round(scaled)))
   }
 
@@ -31,6 +29,33 @@ export function encodeWav(samples: Float32Array, sourceRate: number): ArrayBuffe
   view.setUint32(40, outSamples * 2, true)
   for (let i = 0; i < outSamples; i++) view.setInt16(44 + i * 2, pcm[i], true)
   return buffer
+}
+
+/**
+ * Linear-interpolation resampler. Works for any source rate — the previous
+ * integer floor-decimation silently pitch-shifted audio from devices whose
+ * rate isn't a multiple of 16 kHz (e.g. 44.1 kHz USB mics).
+ */
+export function resample(
+  samples: Float32Array,
+  sourceRate: number,
+  targetRate: number
+): Float32Array {
+  if (sourceRate === targetRate || samples.length === 0) return samples
+  const step = sourceRate / targetRate
+  const outLength = Math.max(1, Math.round(samples.length / step))
+  const out = new Float32Array(outLength)
+  for (let i = 0; i < outLength; i++) {
+    const pos = i * step
+    const i0 = Math.floor(pos)
+    if (i0 + 1 >= samples.length) {
+      out[i] = samples[Math.min(i0, samples.length - 1)]
+      continue
+    }
+    const frac = pos - i0
+    out[i] = samples[i0] + (samples[i0 + 1] - samples[i0]) * frac
+  }
+  return out
 }
 
 function writeAscii(view: DataView, offset: number, text: string): void {

@@ -31,6 +31,9 @@ export type OverlayState =
 // Pill visibility windows (the renderer mirrors these for its exit animation).
 const SUCCESS_VISIBLE_MS = 2200
 const ERROR_VISIBLE_MS = 3600
+// Fails the session if the transcribe→paste pipeline never resolves (hung
+// request, crashed renderer) — otherwise the trigger stays dead until relaunch.
+const PIPELINE_TIMEOUT_MS = 120_000
 
 /**
  * Owns the overlay window and the dictation state machine:
@@ -41,6 +44,7 @@ export class DictationService {
   private overlay: BrowserWindow | null = null
   private recording = false
   private processing = false
+  private watchdog: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly deps: DictationDeps) {}
 
@@ -105,6 +109,7 @@ export class DictationService {
     this.releaseEscape()
     playSound('stop')
     if (this.overlay !== null) this.sendToOverlay(this.overlay, 'overlay:end')
+    this.armWatchdog()
   }
 
   cancelUser(): void {
@@ -123,6 +128,7 @@ export class DictationService {
   cancel(): void {
     this.recording = false
     this.processing = false
+    this.clearWatchdog()
     this.releaseEscape()
     this.hide()
   }
@@ -131,6 +137,7 @@ export class DictationService {
     console.log('[dictation] fail:', message)
     this.processing = false
     this.recording = false
+    this.clearWatchdog()
     this.releaseEscape()
     playSound('error')
     this.overlay?.webContents.send('overlay:state', {
@@ -138,6 +145,20 @@ export class DictationService {
       message
     } satisfies OverlayState)
     this.hideAfter(ERROR_VISIBLE_MS)
+  }
+
+  private armWatchdog(): void {
+    this.clearWatchdog()
+    this.watchdog = setTimeout(() => {
+      if (this.processing) this.fail('Dictation timed out — the service did not respond')
+    }, PIPELINE_TIMEOUT_MS)
+  }
+
+  private clearWatchdog(): void {
+    if (this.watchdog !== null) {
+      clearTimeout(this.watchdog)
+      this.watchdog = null
+    }
   }
 
   private sendState(state: OverlayState): void {
@@ -177,6 +198,13 @@ export class DictationService {
     durationMs: number
     containsSpeech: boolean
   }): Promise<void> {
+    // Only accept a WAV for a session that actually reached "processing" —
+    // a stale capture from a cancelled session must never be transcribed.
+    if (!this.processing) {
+      console.log('[dictation] ignoring capture — no active session')
+      return
+    }
+    this.armWatchdog()
     try {
       console.log(
         '[dictation] capture received:',
@@ -190,7 +218,8 @@ export class DictationService {
       const token = await this.deps.getToken()
       const glossary = await this.deps.getGlossary()
       const outcome = await this.deps.transcribe(token, Buffer.from(payload.wav), glossary)
-      console.log('[dictation] transcribed:', JSON.stringify(outcome.text))
+      // Never log the transcript itself — stdout is a plaintext voice memo.
+      console.log('[dictation] transcribed:', outcome.text.length, 'chars')
       await pasteText(outcome.text)
       console.log('[dictation] pasted')
       this.deps.recordHistory({
@@ -201,6 +230,7 @@ export class DictationService {
         polished: outcome.polished
       })
       this.processing = false
+      this.clearWatchdog()
       playSound('success')
       this.sendState({
         state: 'success',

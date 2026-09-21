@@ -1,6 +1,7 @@
 import { app, shell, clipboard, globalShortcut, BrowserWindow, Menu, Tray, ipcMain, systemPreferences, nativeImage } from 'electron'
 import { spawn } from 'child_process'
 import { join } from 'path'
+import { unlinkSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import trayTemplate from '../../resources/trayTemplate@2x.png?asset'
 import { SettingsStore } from './store'
@@ -10,7 +11,7 @@ import { DesktopAuth } from './auth'
 import { openDatabase } from './db'
 import { SyncService } from './sync'
 import { DictationService } from './dictation'
-import { TriggerEngine } from './triggers'
+import { TriggerEngine, TRIGGER_KEYS } from './triggers'
 
 let dashboard: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -107,29 +108,65 @@ function broadcastAuthState(extra: Record<string, unknown> = {}): void {
   rebuildTrayMenu()
 }
 
+// A sign-in attempt left open this long (browser abandoned) releases its
+// loopback listener so later attempts can start.
+const SIGN_IN_TIMEOUT_MS = 5 * 60_000
+
 function startSignIn(): void {
   if (desktopAuth !== null) return
-  desktopAuth = new DesktopAuth(
+  const auth = new DesktopAuth(
     settings.workerUrl,
     (authorizationCode) => {
-      const request = desktopAuth?.buildTokenRequest(authorizationCode)
-      if (request === undefined) return
-      worker
-        .exchangeAuthorizationCode(request)
-        .then((tokens) => {
-          session.storeTokens(tokens.accessToken, tokens.accessExpiresIn, tokens.refreshToken)
-          settings.set('accountId', tokens.user.id)
-          settings.set('accountEmail', tokens.user.email)
-          broadcastAuthState({ signedIn: true, email: tokens.user.email })
-          showDashboard()
+      const finish = (): void => {
+        auth.dispose()
+        if (desktopAuth === auth) desktopAuth = null
+      }
+      try {
+        const request = auth.buildTokenRequest(authorizationCode)
+        worker
+          .exchangeAuthorizationCode(request)
+          .then((tokens) => {
+            session.storeTokens(tokens.accessToken, tokens.accessExpiresIn, tokens.refreshToken)
+            settings.set('accountId', tokens.user.id)
+            settings.set('accountEmail', tokens.user.email)
+            broadcastAuthState({ signedIn: true, email: tokens.user.email })
+            showDashboard()
+          })
+          .catch((error: Error) => broadcastAuthState({ signedIn: false, error: error.message }))
+          .finally(finish)
+      } catch (error) {
+        broadcastAuthState({
+          signedIn: false,
+          error: error instanceof Error ? error.message : 'Sign-in failed.'
         })
-        .catch((error: Error) => broadcastAuthState({ signedIn: false, error: error.message }))
+        finish()
+      }
     },
-    (message) => broadcastAuthState({ signedIn: false, error: message })
+    (message) => {
+      broadcastAuthState({ signedIn: false, error: message })
+      auth.dispose()
+      if (desktopAuth === auth) desktopAuth = null
+    }
   )
-  void desktopAuth.start().then((result) => {
-    if (!result.ok) broadcastAuthState({ signedIn: false, error: result.message })
-  })
+  desktopAuth = auth
+  const release = (): void => {
+    auth.dispose()
+    if (desktopAuth === auth) desktopAuth = null
+  }
+  auth.start()
+    .then((result) => {
+      if (!result.ok) {
+        broadcastAuthState({ signedIn: false, error: result.message })
+        release()
+      }
+    })
+    .catch((error: Error) => {
+      broadcastAuthState({ signedIn: false, error: error.message })
+      release()
+    })
+  setTimeout(() => {
+    if (desktopAuth === auth) release()
+  }, SIGN_IN_TIMEOUT_MS).unref()
 }
 
 async function signOut(): Promise<void> {
@@ -143,6 +180,15 @@ async function signOut(): Promise<void> {
   }
   session.clear()
   settings.clearAccount()
+  // Vault secrets are device-scoped files; leaving them behind would let a
+  // later sign-in to a different account reuse the previous account's key.
+  for (const name of ['vault-key.bin', 'recovery-secret.bin']) {
+    try {
+      unlinkSync(join(app.getPath('userData'), name))
+    } catch {
+      // absent — nothing to clean
+    }
+  }
   broadcastAuthState({ signedIn: false })
 }
 
@@ -276,15 +322,20 @@ app.whenReady().then(() => {
     triggerKey: settings.get<string>('triggerKey', 'option'),
     workerUrl: settings.workerUrl
   }))
-  ipcMain.handle('settings:set', (_event, key: string, value: boolean | string) => {
-    if (key !== 'keyboardShortcutEnabled' && key !== 'middleClickEnabled' && key !== 'triggerKey') {
-      return false
+  ipcMain.handle('settings:set', (_event, key: string, value: unknown) => {
+    if (key === 'keyboardShortcutEnabled' || key === 'middleClickEnabled') {
+      if (typeof value !== 'boolean') return false
+      settings.set(key, value)
+      if (value) triggers.registerIfMissing()
+      return true
     }
-    settings.set(key, value)
-    if (key === 'keyboardShortcutEnabled' && value) triggers.registerIfMissing()
-    if (key === 'middleClickEnabled' && value) triggers.registerIfMissing()
-    if (key === 'triggerKey') triggers.restart()
-    return true
+    if (key === 'triggerKey') {
+      if (typeof value !== 'string' || !TRIGGER_KEYS.includes(value)) return false
+      settings.set(key, value)
+      triggers.restart()
+      return true
+    }
+    return false
   })
   ipcMain.handle('triggers:status', () => triggers.isRegistered())
   ipcMain.handle('triggers:reregister', () => {
@@ -377,7 +428,12 @@ async function accessibilityTrusted(): Promise<boolean> {
 }
 
 function routeDeepLink(value: string): void {
-  const url = new URL(value)
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return // malformed wovoice:// URL from the OS — nothing to route
+  }
   if (url.hostname !== 'callback' && url.pathname !== '/callback') return
   const code = url.searchParams.get('code') ?? ''
   const state = url.searchParams.get('state') ?? ''

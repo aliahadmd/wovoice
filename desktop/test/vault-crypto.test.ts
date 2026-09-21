@@ -1,3 +1,4 @@
+import { hkdfSync } from 'crypto'
 import { strict as assert } from 'node:assert'
 import { createCipheriv } from 'crypto'
 import { test, describe } from 'node:test'
@@ -22,7 +23,6 @@ const SECRET = Buffer.from(Array.from({ length: 32 }, (_, i) => i))
 describe('vault crypto (byte-exact with Kotlin)', () => {
   test('HKDF matches the Kotlin implementation', () => {
     // Mirrors CrossPlatformVectorTest: hkdfSha256(secret, salt="WoVoice recovery v1", info="acct-123", 32)
-    const { hkdfSync } = require('crypto') as typeof import('crypto')
     const out = Buffer.from(
       hkdfSync('sha256', SECRET, Buffer.from('WoVoice recovery v1'), Buffer.from('acct-123'), 32)
     )

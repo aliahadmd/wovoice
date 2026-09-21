@@ -37,8 +37,8 @@ let detector: SpeechSignalDetector | null = null
 let audioContext: AudioContext | null = null
 let mediaStream: MediaStream | null = null
 let autoStop: ReturnType<typeof setTimeout> | null = null
-let stateTimers: ReturnType<typeof setTimeout>[] = []
-let phaseTimers: ReturnType<typeof setTimeout>[] = []
+const stateTimers: ReturnType<typeof setTimeout>[] = []
+const phaseTimers: ReturnType<typeof setTimeout>[] = []
 let tickInterval: ReturnType<typeof setInterval> | null = null
 let tickStart = 0
 
@@ -98,6 +98,9 @@ function enterRecording(): void {
 
 async function begin(): Promise<void> {
   if (running()) return
+  // Claim the session synchronously: a release that lands while the mic is
+  // still starting must not leave a ghost recording running after finish().
+  runningFlag.value = true
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -108,7 +111,13 @@ async function begin(): Promise<void> {
       }
     })
   } catch {
+    runningFlag.value = false
     fail('Microphone access was denied. Enable it and try again.')
+    return
+  }
+  if (!running()) {
+    // Cancelled while getUserMedia was pending — release the device we opened.
+    teardownAudio()
     return
   }
 
@@ -117,6 +126,10 @@ async function begin(): Promise<void> {
   // Chromium starts contexts suspended without user activation; the overlay
   // is never focused, so resume explicitly or no audio callbacks ever fire.
   if (audioContext.state === 'suspended') await audioContext.resume()
+  if (!running()) {
+    teardownAudio()
+    return
+  }
   detector = new SpeechSignalDetector(audioContext.sampleRate)
   const source = audioContext.createMediaStreamSource(mediaStream)
   const processor = audioContext.createScriptProcessor(4096, 1, 1)
@@ -129,9 +142,13 @@ async function begin(): Promise<void> {
     animateBars(rms)
   }
   source.connect(processor)
-  processor.connect(audioContext.destination)
+  // ScriptProcessorNode only pumps while connected to the destination; a
+  // zero-gain node keeps it running without monitoring the mic out loud.
+  const mute = audioContext.createGain()
+  mute.gain.value = 0
+  processor.connect(mute)
+  mute.connect(audioContext.destination)
 
-  runningFlag.value = true
   autoStop = setTimeout(() => finish(), MAX_DURATION_MS)
 }
 
@@ -190,9 +207,11 @@ function fail(message: string): void {
 }
 
 function setCancelled(): void {
+  // The cancelled state can arrive from main (Esc) while the mic is live:
+  // release the device, the pending auto-stop, and any buffered audio now,
+  // or a stale auto-stop would transcribe and paste the cancelled audio.
+  discardCapture()
   clearTimers(phaseTimers)
-  stopTick()
-  runningFlag.value = false
   setState('cancelled')
   pill.dataset.tone = ''
   setLine('Dictation cancelled')
@@ -201,16 +220,34 @@ function setCancelled(): void {
   schedule(() => pill.classList.add('closing'), CANCELLED_EXIT_AT_MS)
 }
 
+/** Releases every capture resource; safe to call from any state. */
+function discardCapture(): void {
+  if (autoStop !== null) {
+    clearTimeout(autoStop)
+    autoStop = null
+  }
+  stopTick()
+  chunks = []
+  detector = null
+  teardownAudio()
+  runningFlag.value = false
+}
+
 function finish(): void {
   if (autoStop !== null) {
     clearTimeout(autoStop)
     autoStop = null
   }
-  if (tickInterval !== null) clearInterval(tickInterval)
+  stopTick()
   enterProcessing()
   const captured = chunks
   chunks = []
   const detection = detector?.result() ?? { containsSpeech: false, durationMs: 0 }
+  detector = null
+  // Read the live rate before teardownAudio() nulls the context — the
+  // fallback would otherwise encode every recording as 48 kHz regardless
+  // of the input device (44.1 kHz mics produced pitch-shifted WAVs).
+  const sampleRate = audioContext?.sampleRate ?? 48_000
   teardownAudio()
   runningFlag.value = false
 
@@ -226,8 +263,8 @@ function finish(): void {
     merged.set(chunk, offset)
     offset += chunk.length
   }
-  const wav = encodeWav(merged, audioContext?.sampleRate ?? 48_000)
-  console.log('overlay page: sending WAV,', merged.length, 'samples @', audioContext?.sampleRate ?? 48_000, 'Hz')
+  const wav = encodeWav(merged, sampleRate)
+  console.log('overlay page: sending WAV,', merged.length, 'samples @', sampleRate, 'Hz')
   window.api.overlay.done({
     wav,
     durationMs: detection.durationMs,
@@ -236,11 +273,7 @@ function finish(): void {
 }
 
 function cancelCapture(): void {
-  if (autoStop !== null) clearTimeout(autoStop)
-  autoStop = null
-  chunks = []
-  teardownAudio()
-  runningFlag.value = false
+  discardCapture()
   window.api.overlay.cancelled()
 }
 
@@ -259,10 +292,6 @@ window.api.overlay.onBegin(() => {
   void begin()
 })
 window.api.overlay.onEnd(() => finish())
-window.api.overlay.onCancel(() => {
-  clearTimers(stateTimers)
-  cancelCapture()
-})
 window.api.overlay.onState((state) => {
   if (state.state === 'transcribing') {
     // Main picked the capture up; keep the processing visuals going.

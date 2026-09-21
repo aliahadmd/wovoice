@@ -4,6 +4,7 @@ import { join } from 'path'
 import { WorkerError, type WorkerClient } from './worker'
 import {
   decodeRecoveryKey,
+  decryptRecord,
   encryptRecord,
   newSecret,
   unwrapVaultKey,
@@ -101,14 +102,24 @@ export class SyncService {
     const accountId = this.accountId()
     const remote = await this.deps.worker.getVault(token)
     const localKey = this.loadSealed('vault-key.bin')
+    const localRecovery = this.loadSealed('recovery-secret.bin')
     if (remote !== null && localKey !== null) {
+      // Prove the stored key really is this account's vault key; a stale key
+      // left over from another account (sign-out clears the files, but never
+      // trust local state) must surface as needs-recovery, not silently
+      // decrypt nothing while pushing records no device can read.
+      const unwrapped =
+        localRecovery !== null ? unwrapVaultKey(remote, localRecovery, accountId) : null
+      if (unwrapped === null || !unwrapped.equals(localKey)) return 'needs-recovery'
       this.vaultKey = localKey
       return 'ready'
     }
     if (remote !== null) return 'needs-recovery'
 
-    const vaultKey = localKey ?? newSecret()
-    const recoverySecret = this.loadSealed('recovery-secret.bin') ?? newSecret()
+    // No remote vault: any locally stored key belongs to a previous account
+    // whose vault no longer exists server-side, so always mint fresh secrets.
+    const vaultKey = newSecret()
+    const recoverySecret = newSecret()
     const wrapped = wrapVaultKey(vaultKey, recoverySecret, accountId, KEY_VERSION)
     await this.deps.worker.putVault(token, wrapped, null)
     this.seal('vault-key.bin', vaultKey)
@@ -203,7 +214,6 @@ export class SyncService {
     item: RemoteSyncItem,
     accountId: string
   ): Record<string, unknown> | null {
-    const { decryptRecord } = require('./vault-crypto') as typeof import('./vault-crypto')
     const plaintext = decryptRecord(
       vaultKey,
       { nonce: item.nonce ?? '', ciphertext: item.ciphertext ?? '' },
@@ -322,10 +332,8 @@ export class SyncService {
         else if (applied.type === 'dictionary') this.deps.db.markDictionarySynced(applied.id, applied.version)
         this.deps.db.clearTombstone(applied.type, applied.id)
       }
-      // Tombstoned history rows leave the local list once their tombstone lands.
-      for (const tombstone of this.deps.db.tombstones()) {
-        if (tombstone.recordType === 'history') continue
-      }
+      // Tombstoned history rows leave the local list once their tombstone
+      // has landed and the local row is confirmed gone.
       for (const item of items) {
         if (!item.deleted || item.type !== 'history') continue
         if (this.deps.db.historyByRequestId(item.id) === null) continue

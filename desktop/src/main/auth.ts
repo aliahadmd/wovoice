@@ -12,6 +12,7 @@ export class DesktopAuth {
   private server: Server | null = null
   private verifier: string | null = null
   private state: string | null = null
+  private settled = false
 
   constructor(
     private readonly workerUrl: string,
@@ -28,6 +29,7 @@ export class DesktopAuth {
 
   async start(): Promise<{ ok: boolean; message?: string }> {
     if (this.server !== null) return { ok: false, message: 'Sign-in is already in progress.' }
+    this.settled = false
     const { verifier, challenge, state } = this.pkce()
     this.verifier = verifier
     this.state = state
@@ -51,19 +53,32 @@ export class DesktopAuth {
    * loopback listener missed the response, e.g. app restarted mid-sign-in).
    */
   handleExternalCallback(authorizationCode: string, returnedState: string): void {
+    if (this.settled) return
     if (this.state === null || returnedState !== this.state) {
       this.onFailed('The sign-in response could not be verified. Please try again.')
       return
     }
-    this.server?.close()
-    this.server = null
+    this.settled = true
+    this.closeServer()
     this.onCompleted(authorizationCode)
+  }
+
+  /**
+   * Releases the loopback listener and pending PKCE state — used when sign-in
+   * is abandoned (timeout, failure) so a fresh attempt can start afterwards.
+   */
+  dispose(): void {
+    this.settled = true
+    this.closeServer()
+    this.verifier = null
+    this.state = null
   }
 
   /** Waits for the loopback callback, then hands the code to onCompleted. */
   private awaitCallback(): void {
     const server = this.server
     if (server === null) return
+    let handled = false
     server.on('request', (request, response) => {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1')
       const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
@@ -82,9 +97,12 @@ export class DesktopAuth {
 
       const code = url.searchParams.get('code') ?? ''
       const returnedState = url.searchParams.get('state') ?? ''
+      // A browser retry must not run the completion twice (the second
+      // exchange would fail after the verifier was consumed).
       setImmediate(() => {
-        this.server?.close()
-        this.server = null
+        if (handled) return
+        handled = true
+        this.closeServer()
 
         if (!code || returnedState !== this.state) {
           this.onFailed('The sign-in response could not be verified. Please try again.')
@@ -93,6 +111,11 @@ export class DesktopAuth {
         this.onCompleted(code)
       })
     })
+  }
+
+  private closeServer(): void {
+    this.server?.close()
+    this.server = null
   }
 
   private listen(): Promise<number> {

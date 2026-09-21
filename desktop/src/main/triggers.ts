@@ -11,6 +11,15 @@ interface TriggerSettings {
 }
 
 // Raw macOS virtual keycodes (kVK_*) for each selectable trigger key.
+export const TRIGGER_KEYS: readonly string[] = [
+  'option',
+  'option-right',
+  'command',
+  'command-right',
+  'caps-lock',
+  'fn'
+]
+
 const TRIGGER_KEY_CODES: Record<string, number[]> = {
   option: [58], // left Option — default
   'option-right': [61],
@@ -82,8 +91,15 @@ export class TriggerEngine {
           console.log('[trigger] tapd exited with code', code)
         }
       })
+      // spawn() reports ENOENT/permissions failures asynchronously — without
+      // this listener the error throws in the main process and isRegistered()
+      // would keep reporting a healthy helper that never ran.
+      child.on('error', (error) => {
+        if (this.helper === child) this.helper = null
+        console.error('[trigger] tapd failed to run:', error)
+      })
       this.helper = child
-      console.log('[trigger] tap started (tapd), keycodes', this.activeCodes.join(','))
+      console.log('[trigger] tap started (tapd), keycodes', this.activeCodes.join(', '))
     } catch (error) {
       console.error('[trigger] registration failed:', error)
       this.helper = null

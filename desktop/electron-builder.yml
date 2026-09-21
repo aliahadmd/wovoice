@@ -20,12 +20,15 @@ protocols:
 mac:
   category: public.app-category.productivity
   identity: "Apple Development: aliahadmd1@gmail.com (J9N3B2KAPR)"
-  hardenedRuntime: false
+  hardenedRuntime: true
   target:
     - target: dmg
     - target: dir
   extendInfo:
     - NSMicrophoneUsageDescription: WoVoice needs microphone access to convert your speech into text.
+    - NSAppleEventsUsageDescription: WoVoice sends a paste keystroke to the app you are using to insert your dictated text.
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
   notarize: false
 dmg:
   artifactName: ${name}-${version}.${ext}

@@ -182,7 +182,7 @@ function Dashboard(): React.JSX.Element {
           <>
             <div className="hero">
               <h1>Account</h1>
-              <p>Your WoVoice session lives in this Mac's Keychain.</p>
+              <p>Your WoVoice session lives in this Mac&apos;s Keychain.</p>
             </div>
             <div className="card">
               {auth.signedIn ? (
@@ -194,7 +194,7 @@ function Dashboard(): React.JSX.Element {
                   {profile?.quota && (
                     <>
                       <div className="stat-row">
-                        <span className="label">Today's quota</span>
+                        <span className="label">Today&apos;s quota</span>
                         <span className="value">
                           {Math.round(profile.quota.remainingAudioSeconds)} of{' '}
                           {Math.round(profile.quota.limitAudioSeconds)} seconds left
@@ -673,7 +673,7 @@ function SyncCard({ signedIn }: { signedIn: boolean }): React.JSX.Element {
       <h2>Encrypted sync</h2>
       <p>
         History and dictionary sync end-to-end encrypted with your phone. Paste the recovery
-        key from a signed-in device to unlock this Mac's vault.
+        key from a signed-in device to unlock this Mac&apos;s vault.
       </p>
       <p>
         <button className="action" onClick={runSync} disabled={busy}>

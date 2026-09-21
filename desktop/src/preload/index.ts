@@ -65,15 +65,11 @@ const api = {
       ipcRenderer.send('overlay:done', payload),
     cancelled: (): void => ipcRenderer.send('overlay:cancelled'),
     fail: (message: string): void => ipcRenderer.send('overlay:fail', message),
-    setLabel: (text: string): void => ipcRenderer.send('overlay:label', text),
     onBegin: (listener: () => void): void => {
       ipcRenderer.on('overlay:begin', () => listener())
     },
     onEnd: (listener: () => void): void => {
       ipcRenderer.on('overlay:end', () => listener())
-    },
-    onCancel: (listener: () => void): void => {
-      ipcRenderer.on('overlay:cancel', () => listener())
     },
     onState: (
       listener: (
