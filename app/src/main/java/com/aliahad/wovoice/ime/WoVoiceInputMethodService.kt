@@ -124,6 +124,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
     override fun onFinishInputView(finishingInput: Boolean) {
         pendingCorrection = null
         cancelActiveWork()
+        discardTransientState()
         sessions.invalidate()
         super.onFinishInputView(finishingInput)
     }
@@ -131,6 +132,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
     override fun onFinishInput() {
         pendingCorrection = null
         cancelActiveWork()
+        discardTransientState()
         sessions.invalidate()
         super.onFinishInput()
     }
@@ -138,6 +140,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
     override fun onWindowHidden() {
         pendingCorrection = null
         cancelActiveWork()
+        discardTransientState()
         sessions.invalidate()
         super.onWindowHidden()
     }
@@ -187,9 +190,19 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
 
     override fun onFinishVoice() {
         if (state !is KeyboardState.Recording) return
+        // The capture service may still be binding: with no binder nothing is
+        // recording, so finishCapture() could never arrive and the keyboard
+        // would sit in Processing forever. Return to idle instead — and make
+        // sure the pending bind does not start a capture nobody will finish.
+        val binder = captureBinder
+        if (binder == null) {
+            pendingCapture = false
+            showError("Recording hadn't started yet — tap to try again.")
+            return
+        }
         state = KeyboardState.Processing
         keyboard?.setState(state)
-        captureBinder?.finishCapture()
+        binder.finishCapture()
     }
 
     override fun onCancelVoice() {
@@ -329,7 +342,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
                 if (!isInputViewShown) {
                     // The keyboard can reappear within the same input session (e.g. the
                     // notification shade). Never leave it rendering a stale Processing state.
-                    discardProcessingState()
+                    discardTransientState()
                     return@launch
                 }
                 when (result) {
@@ -337,7 +350,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
                         val profile = withContext(Dispatchers.IO) { account.loadProfile() }
                         if (!sessions.isActive(session) || session != currentSession) return@launch
                         if (!isInputViewShown) {
-                            discardProcessingState()
+                            discardTransientState()
                             return@launch
                         }
                         when {
@@ -372,7 +385,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
     private fun commitFinalText(result: TranscriptionClient.Result.Success, audioDurationMs: Long) {
         val connection = currentInputConnection
         if (connection == null) {
-            discardProcessingState()
+            discardTransientState()
             return
         }
         val text = TextCommitPolicy.withLocalSpacing(previousCharacter(), result.text)
@@ -452,8 +465,13 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
         keyboard?.setState(state)
     }
 
-    private fun discardProcessingState() {
-        if (state is KeyboardState.Processing) {
+    /**
+     * Clears Processing/Error states that no worker will ever resolve — left
+     * behind when the keyboard hides mid-transcription or a capture never
+     * started — so a re-shown keyboard doesn't render a stale pill forever.
+     */
+    private fun discardTransientState() {
+        if (state is KeyboardState.Processing || state is KeyboardState.Error) {
             state = KeyboardState.VoiceIdle
             keyboard?.setState(state)
         }

@@ -626,33 +626,37 @@ class WoVoiceKeyboardView(context: Context) : SwipeFrameLayout(context) {
         }
     }
 
-    private fun installDeleteTouch(view: TextView) {
-        val handler = Handler(Looper.getMainLooper())
-        var repeated = false
-        val repeater = object : Runnable {
-            override fun run() {
-                repeated = true
-                listener.onDelete()
-                handler.postDelayed(this, 55)
-            }
+    // Kept as fields so a teardown mid-press can cancel the auto-repeat; a
+    // self-rescheduling runnable left running would keep deleting text in
+    // whatever editor is active.
+    private val deleteHandler = Handler(Looper.getMainLooper())
+    private var deleteRepeated = false
+    private val deleteRepeater = object : Runnable {
+        override fun run() {
+            deleteRepeated = true
+            listener.onDelete()
+            deleteHandler.postDelayed(this, 55)
         }
+    }
+
+    private fun installDeleteTouch(view: TextView) {
         view.setOnClickListener { listener.onDelete() }
         view.setOnTouchListener { key, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    repeated = false
+                    deleteRepeated = false
                     animatePressed(key, true)
                     if (hapticsEnabled) key.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    handler.postDelayed(repeater, 350)
+                    deleteHandler.postDelayed(deleteRepeater, 350)
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    handler.removeCallbacks(repeater)
+                    deleteHandler.removeCallbacks(deleteRepeater)
                     animatePressed(key, false)
-                    if (!repeated && event.x in 0f..key.width.toFloat() && event.y in 0f..key.height.toFloat()) key.performClick()
+                    if (!deleteRepeated && event.x in 0f..key.width.toFloat() && event.y in 0f..key.height.toFloat()) key.performClick()
                     true
                 }
-                MotionEvent.ACTION_CANCEL -> { handler.removeCallbacks(repeater); animatePressed(key, false); true }
+                MotionEvent.ACTION_CANCEL -> { deleteHandler.removeCallbacks(deleteRepeater); animatePressed(key, false); true }
                 else -> true
             }
         }
@@ -724,6 +728,7 @@ class WoVoiceKeyboardView(context: Context) : SwipeFrameLayout(context) {
     }
 
     override fun onDetachedFromWindow() {
+        deleteHandler.removeCallbacks(deleteRepeater)
         waveform.setActive(false)
         processing.setActive(false)
         super.onDetachedFromWindow()

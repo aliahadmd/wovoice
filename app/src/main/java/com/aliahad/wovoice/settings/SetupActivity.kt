@@ -893,7 +893,14 @@ class SetupActivity : AppCompatActivity() {
             "Sign out",
         ) {
             scope.launch {
-                withContext(Dispatchers.IO) { account.logout() }
+                val revoked = withContext(Dispatchers.IO) { account.logout() }
+                if (!revoked) {
+                    Snackbar.make(
+                        contentHost,
+                        "Signed out on this phone, but the server session could not be revoked. It will expire on its own.",
+                        Snackbar.LENGTH_LONG,
+                    ).show()
+                }
                 updateSetupStatus(); refreshHome()
             }
         }

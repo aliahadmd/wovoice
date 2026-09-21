@@ -115,6 +115,18 @@ class SettingsStore(context: Context) : AccountSettings {
         get() = preferences.getBoolean(KEY_VAULT_RECOVERY_ACKNOWLEDGED, false)
         set(value) = preferences.edit().putBoolean(KEY_VAULT_RECOVERY_ACKNOWLEDGED, value).apply()
 
+    // One record id per line; the coordinator caps the set before saving.
+    override var syncDeadLetters: Set<String>
+        get() = (preferences.getString(KEY_SYNC_DEAD_LETTERS, "") ?: "")
+            .lineSequence()
+            .filter(String::isNotEmpty)
+            .toSet()
+        set(value) {
+            preferences.edit()
+                .putString(KEY_SYNC_DEAD_LETTERS, value.take(MAX_DEAD_LETTERS).joinToString("\n"))
+                .apply()
+        }
+
     // One emoji per line; dedupe and cap are applied by EmojiRecents before saving.
     var recentEmojis: List<String>
         get() = (preferences.getString(KEY_RECENT_EMOJIS, "") ?: "")
@@ -138,6 +150,7 @@ class SettingsStore(context: Context) : AccountSettings {
             .remove(KEY_ACCOUNT_SUPPORT_EMAIL)
             .remove(KEY_SYNC_CURSOR)
             .remove(KEY_VAULT_RECOVERY_ACKNOWLEDGED)
+            .remove(KEY_SYNC_DEAD_LETTERS)
             .apply()
         secrets.clearAccount()
     }
@@ -171,6 +184,8 @@ class SettingsStore(context: Context) : AccountSettings {
         const val KEY_LEGACY_CREDENTIAL_REMOVED = "legacy_credential_removed"
         const val KEY_SYNC_CURSOR = "sync_cursor"
         const val KEY_VAULT_RECOVERY_ACKNOWLEDGED = "vault_recovery_acknowledged"
+        const val KEY_SYNC_DEAD_LETTERS = "sync_dead_letters"
         const val KEY_RECENT_EMOJIS = "recent_emojis"
+        const val MAX_DEAD_LETTERS = 50
     }
 }

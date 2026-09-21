@@ -77,6 +77,7 @@ class WavRecorder(
         audioRecord = recorder
 
         var dataBytes = 0L
+        var readFailures = 0
         val speechDetector = SpeechSignalDetector(SAMPLE_RATE)
         val buffer = ShortArray(maxOf(minBuffer / 2, 1_024))
         try {
@@ -87,9 +88,16 @@ class WavRecorder(
                 while (running.get() && dataBytes < MAX_DATA_BYTES) {
                     val count = recorder.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
                     if (count <= 0) {
+                        // A dead/invalid recorder ends the loop; transient error
+                        // codes (ERROR, BAD_VALUE, NO_MORE_DATA…) must not spin
+                        // this thread at 100% CPU forever — bail out after a
+                        // short run of consecutive failures.
                         if (count == AudioRecord.ERROR_DEAD_OBJECT || count == AudioRecord.ERROR_INVALID_OPERATION) break
+                        readFailures++
+                        if (readFailures >= MAX_CONSECUTIVE_READ_FAILURES) break
                         continue
                     }
+                    readFailures = 0
                     val pcm = ByteArray(count * 2)
                     for (index in 0 until count) {
                         val sample = buffer[index].toInt()
@@ -117,6 +125,10 @@ class WavRecorder(
                 )
             } else {
                 file.delete()
+                // A recorder that died before capturing anything used to end
+                // the loop silently, leaving the IME waiting for a result that
+                // never came. Cancellations (keepFile=false) stay silent.
+                if (keepFile.get()) callback.onError("The microphone stopped responding.")
             }
         } catch (_: Exception) {
             file.delete()
@@ -198,5 +210,6 @@ class WavRecorder(
         const val WAV_HEADER_BYTES = 44
         const val BYTES_PER_SECOND = SAMPLE_RATE * 2
         const val MAX_DATA_BYTES = BYTES_PER_SECOND * 60L
+        const val MAX_CONSECUTIVE_READ_FAILURES = 10
     }
 }
