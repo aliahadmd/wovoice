@@ -3,6 +3,8 @@ package com.aliahad.wovoice.data
 import com.aliahad.wovoice.account.AccountSettings
 import com.aliahad.wovoice.network.TranscriptionClient
 import java.text.Normalizer
+import java.time.Instant
+import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.UUID
 import kotlin.math.roundToInt
@@ -18,6 +20,7 @@ class WoVoiceRepository(
         committedText: String,
         audioDurationMs: Long,
         keepHistory: Boolean,
+        analyticsSyncId: String = UUID.randomUUID().toString(),
     ) {
         val now = ZonedDateTime.now()
         val ownerAccountId = owner() ?: return
@@ -67,7 +70,7 @@ class WoVoiceRepository(
             ownerAccountId = ownerAccountId,
         )
         val event = AnalyticsSyncEvent(
-            syncId = UUID.randomUUID().toString(),
+            syncId = analyticsSyncId,
             ownerAccountId = ownerAccountId,
             createdAtMs = record.createdAtMs,
             zoneId = record.zoneId,
@@ -172,10 +175,26 @@ class WoVoiceRepository(
 
     suspend fun bestGlossary(): List<String> = dao.bestDictionary(owner(), 100).map(DictionaryEntry::term)
 
-    suspend fun noteCorrection() {
+    /**
+     * Records that the dictation behind [analyticsSyncId] was corrected. The flag
+     * is set on its synced analytics event (and re-queued for upload) so other
+     * devices count it too; before, only this phone's daily total moved.
+     */
+    suspend fun noteCorrection(analyticsSyncId: String?) {
         val ownerAccountId = owner() ?: return
-        val now = ZonedDateTime.now()
-        dao.noteCorrection("$ownerAccountId|${now.toLocalDate()}|${now.zone.id}")
+        val event = analyticsSyncId?.let { dao.analyticsBySyncId(ownerAccountId, it) }
+        if (event == null) {
+            val now = ZonedDateTime.now()
+            dao.noteCorrection(analyticsDateKey(ownerAccountId, now.toInstant().toEpochMilli(), now.zone.id))
+            return
+        }
+        if (event.corrected) return
+        dao.setEventCorrected(
+            event,
+            corrected = true,
+            dateKey = analyticsDateKey(ownerAccountId, event.createdAtMs, event.zoneId),
+            syncState = SYNC_LOCAL,
+        )
     }
 
     suspend fun importGlossary(values: List<String>) {
@@ -287,6 +306,13 @@ class WoVoiceRepository(
 
         fun normalize(value: String): String = Normalizer.normalize(value.trim(), Normalizer.Form.NFKC).lowercase()
     }
+}
+
+/** The daily-usage row an analytics event counts toward: its own local day and zone. */
+fun analyticsDateKey(accountId: String, createdAtMs: Long, zoneId: String): String {
+    val zone = runCatching { ZoneId.of(zoneId) }.getOrDefault(ZoneId.systemDefault())
+    val local = Instant.ofEpochMilli(createdAtMs).atZone(zone)
+    return "$accountId|${local.toLocalDate()}|${zone.id}"
 }
 
 enum class AnalyticsPeriod {

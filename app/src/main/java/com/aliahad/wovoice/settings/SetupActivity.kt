@@ -2,8 +2,6 @@ package com.aliahad.wovoice.settings
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.app.Activity
-import android.app.KeyguardManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -58,7 +56,6 @@ import com.aliahad.wovoice.data.DictionaryEntry
 import com.aliahad.wovoice.data.WoVoiceRepository
 import com.aliahad.wovoice.sync.SyncCoordinator
 import com.aliahad.wovoice.sync.SyncResult
-import com.aliahad.wovoice.sync.VaultSetupResult
 import com.aliahad.wovoice.ui.dp
 import com.aliahad.wovoice.ui.rounded
 import com.aliahad.wovoice.ui.styleText
@@ -68,10 +65,6 @@ import com.google.android.material.card.MaterialCardView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.switchmaterial.SwitchMaterial
-import com.google.zxing.BarcodeFormat
-import com.journeyapps.barcodescanner.BarcodeEncoder
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -131,10 +124,13 @@ class SetupActivity : AppCompatActivity() {
     private var accountButton: Button? = null
     private var accountSignInHelp: View? = null
     private var accountRestrictionMessage: TextView? = null
-    private var accountRecoveryAction: View? = null
     private var accountSignOutAction: View? = null
     private var accountDeleteAction: View? = null
-    private var pendingRecoveryKey: String? = null
+    private var cloudSyncStatus: TextView? = null
+    private var cloudSyncActions: List<View> = emptyList()
+    private var historySyncSwitch: SwitchMaterial? = null
+    private var retentionAction: View? = null
+    private var syncing = false
     private var notificationPermissionRequested = false
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -145,22 +141,6 @@ class SetupActivity : AppCompatActivity() {
 
     private val notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
         updateSetupStatus()
-    }
-
-    private val cameraPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
-        if (allowed) launchRecoveryScanner()
-        else Snackbar.make(contentHost, "Camera permission is needed only to scan a recovery QR code.", Snackbar.LENGTH_LONG).show()
-    }
-
-    private val recoveryScanner = registerForActivityResult(ScanContract()) { result ->
-        result.contents?.let(::importScannedRecovery)
-    }
-
-    private val deviceCredentialLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val key = pendingRecoveryKey
-        pendingRecoveryKey = null
-        if (result.resultCode == Activity.RESULT_OK && key != null) showRecoveryKeyDialog(key)
-        else Snackbar.make(contentHost, "Recovery key remains hidden.", Snackbar.LENGTH_SHORT).show()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -179,8 +159,7 @@ class SetupActivity : AppCompatActivity() {
         showTab(activeTab, animate = false)
         handleAuthCallback(intent)
         scope.launch(Dispatchers.IO) {
-            repository.importGlossary(store.glossary)
-            syncGlossaryCache()
+            store.takeLegacyGlossary()?.let { repository.importGlossary(it) }
         }
     }
 
@@ -580,11 +559,19 @@ class SetupActivity : AppCompatActivity() {
             setPadding(dp(2), dp(7), dp(2), dp(5))
             visibility = View.GONE
         }
-        accountRecoveryAction = settingAction(
-            "Recovery and encrypted sync",
-            "History, dictionary, and analytics are encrypted before upload",
-            "Manage",
-        ) { showRecoveryControls() }
+        cloudSyncStatus = statusText()
+        val syncNowAction = settingAction(
+            "Cloud sync",
+            "History, dictionary, and analytics follow your account on every device",
+            "Sync now",
+        ) { runCloudSync(showResult = true) }
+        historySyncSwitch = settingSwitch(
+            "Sync history",
+            "Keep dictated text in your account so your other devices show it",
+            store.historySyncEnabled,
+        ) { enabled -> onHistorySyncToggled(enabled) }
+        retentionAction = settingAction("Auto-delete history", retentionSummary(), "Change") { chooseRetention() }
+        cloudSyncActions = listOf(cloudSyncStatus!!, syncNowAction, historySyncSwitch!!, retentionAction!!)
         accountSignOutAction = settingAction(
             "Sign out",
             "Manual keyboard remains available offline",
@@ -600,7 +587,7 @@ class SetupActivity : AppCompatActivity() {
             accountButton!!,
             accountSignInHelp!!,
             accountRestrictionMessage!!,
-            accountRecoveryAction!!,
+            *cloudSyncActions.toTypedArray(),
             accountSignOutAction!!,
             accountDeleteAction!!,
         )))
@@ -698,7 +685,8 @@ class SetupActivity : AppCompatActivity() {
         accountRestrictionMessage?.text = if (restricted) restrictionSummary() else ""
         accountRestrictionMessage?.visibility = if (restricted) View.VISIBLE else View.GONE
         accountSignInHelp?.visibility = if (signedIn) View.GONE else View.VISIBLE
-        accountRecoveryAction?.visibility = if (signedIn && !restricted) View.VISIBLE else View.GONE
+        cloudSyncActions.forEach { it.visibility = if (signedIn && !restricted) View.VISIBLE else View.GONE }
+        updateCloudSyncStatus()
         accountSignOutAction?.visibility = if (signedIn) View.VISIBLE else View.GONE
         accountDeleteAction?.visibility = if (signedIn) View.VISIBLE else View.GONE
     }
@@ -814,7 +802,8 @@ class SetupActivity : AppCompatActivity() {
                 is AccountResult.Success -> {
                     updateSetupStatus()
                     showPolicyUpdateNoticeIfNeeded()
-                    if (account.cloudServicesAllowed) runEncryptedSync(showResult = false)
+                    updateCloudSyncStatus()
+                    if (account.cloudServicesAllowed) runCloudSync(showResult = false)
                 }
                 is AccountResult.Error -> {
                     updateSetupStatus()
@@ -919,182 +908,121 @@ class SetupActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun showRecoveryControls() {
-        if (!account.signedIn) {
-            Snackbar.make(contentHost, "Sign in before setting up encrypted sync.", Snackbar.LENGTH_LONG).show()
-            return
-        }
-        if (!account.cloudServicesAllowed) {
-            showAccountRestriction()
-            return
-        }
-        val configured = sync.recoveryKey() != null
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Encrypted sync recovery")
-            .setMessage(
-                if (configured) {
-                    "This device can unlock your encrypted vault. Reveal the recovery key after confirming your screen lock, or import a key from another device."
-                } else {
-                    "WoVoice will create a recovery key for your encrypted history, dictionary, and analytics. Cloudflare cannot read these records. Keep it safe: losing every signed-in device and this key makes synchronized data unrecoverable."
-                },
-            )
-            .setNegativeButton("Close", null)
-            .setNeutralButton("Import key") { _, _ -> showRecoveryImportOptions() }
-            .setPositiveButton(if (configured) "Reveal key" else "Set up") { _, _ -> setupRecoveryVault() }
-            .show()
-    }
-
-    private fun setupRecoveryVault() {
+    /** Uploads local changes and downloads other devices' — no keys, just the signed-in account. */
+    private fun runCloudSync(showResult: Boolean) {
+        if (!account.cloudServicesAllowed || syncing) return
+        syncing = true
+        cloudSyncStatus?.text = "Syncing…"
         scope.launch {
-            when (val result = withContext(Dispatchers.IO) { sync.ensureVault() }) {
-                VaultSetupResult.Ready -> sync.recoveryKey()?.let(::requestRecoveryReveal)
-                    ?: showRecoveryImportOptions()
-                is VaultSetupResult.Created -> requestRecoveryReveal(result.recoveryKey)
-                VaultSetupResult.NeedsRecovery -> showRecoveryImportOptions()
-                is VaultSetupResult.Error -> Snackbar.make(contentHost, result.message, Snackbar.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun requestRecoveryReveal(key: String) {
-        val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-        if (!keyguard.isDeviceSecure) {
-            MaterialAlertDialogBuilder(this)
-                .setTitle("Screen lock required")
-                .setMessage("Set a PIN, pattern, or password before revealing the WoVoice recovery key.")
-                .setNegativeButton("Not now", null)
-                .setPositiveButton("Open security settings") { _, _ -> startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) }
-                .show()
-            return
-        }
-        val intent = keyguard.createConfirmDeviceCredentialIntent(
-            "Reveal WoVoice recovery key",
-            "Confirm your screen lock to display this sensitive key.",
-        ) ?: return
-        pendingRecoveryKey = key
-        deviceCredentialLauncher.launch(intent)
-    }
-
-    private fun showRecoveryKeyDialog(key: String) {
-        val qrText = "wovoice-recovery://v1?key=${Uri.encode(key)}"
-        val qr = runCatching {
-            BarcodeEncoder().encodeBitmap(qrText, BarcodeFormat.QR_CODE, dp(240), dp(240))
-        }.getOrNull()
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(18), dp(4), dp(18), 0)
-            if (qr != null) addView(ImageView(this@SetupActivity).apply {
-                setImageBitmap(qr)
-                contentDescription = "WoVoice recovery QR code"
-                setPadding(dp(6), dp(6), dp(6), dp(6))
-                setBackgroundColor(Color.WHITE)
-            }, linear(height = dp(252)).apply { width = dp(252) })
-            addView(TextView(this@SetupActivity).apply {
-                text = key
-                styleText(13f)
-                setTextIsSelectable(true)
-                gravity = Gravity.CENTER
-                setPadding(0, dp(14), 0, 0)
-            })
-        }
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Save your recovery key")
-            .setMessage("Store this key privately. WoVoice and Cloudflare cannot restore encrypted data without it.")
-            .setView(content)
-            .setNegativeButton("Copy") { _, _ ->
-                setClipboard("WoVoice recovery key", key)
-            }
-            .setPositiveButton("I saved it") { _, _ ->
-                store.vaultRecoveryAcknowledged = true
-                runEncryptedSync(showResult = true)
-            }
-            .show()
-    }
-
-    private fun showRecoveryImportOptions() {
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Import recovery key")
-            .setMessage("Scan the QR code from another signed-in device, or enter the checksummed key manually.")
-            .setNegativeButton("Cancel", null)
-            .setNeutralButton("Enter manually") { _, _ -> showManualRecoveryEntry() }
-            .setPositiveButton("Scan QR") { _, _ -> requestRecoveryScan() }
-            .show()
-    }
-
-    private fun showManualRecoveryEntry() {
-        val field = input("WV1-…", InputType.TYPE_CLASS_TEXT).apply {
-            isSingleLine = false
-            minLines = 2
-        }
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Enter recovery key")
-            .setView(LinearLayout(this).apply {
-                setPadding(dp(20), dp(6), dp(20), 0)
-                addView(field, linear(match = true))
-            })
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Import") { _, _ -> importRecovery(field.text.toString()) }
-            .show()
-    }
-
-    private fun requestRecoveryScan() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            launchRecoveryScanner()
-        } else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-    }
-
-    private fun launchRecoveryScanner() {
-        recoveryScanner.launch(
-            ScanOptions()
-                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                .setPrompt("Scan a WoVoice recovery QR code")
-                .setBeepEnabled(false)
-                .setOrientationLocked(false),
-        )
-    }
-
-    private fun importScannedRecovery(value: String) {
-        val key = runCatching { Uri.parse(value) }
-            .getOrNull()
-            ?.takeIf { it.scheme == "wovoice-recovery" && it.host == "v1" }
-            ?.getQueryParameter("key")
-            ?: value.takeIf { it.trim().startsWith("WV1", ignoreCase = true) }
-        if (key == null) {
-            Snackbar.make(contentHost, "That QR code is not a WoVoice recovery key.", Snackbar.LENGTH_LONG).show()
-        } else importRecovery(key)
-    }
-
-    private fun importRecovery(key: String) {
-        scope.launch {
-            when (val result = withContext(Dispatchers.IO) { sync.importRecoveryKey(key) }) {
-                VaultSetupResult.Ready -> {
-                    store.vaultRecoveryAcknowledged = true
-                    Snackbar.make(contentHost, "Encrypted vault recovered on this device.", Snackbar.LENGTH_LONG).show()
-                    runEncryptedSync(showResult = false)
+            val result = withContext(Dispatchers.IO) { sync.syncNow() }
+            syncing = false
+            when (result) {
+                is SyncResult.Success -> {
+                    if (showResult) {
+                        Snackbar.make(
+                            contentHost,
+                            result.warning ?: "Synced: ${result.uploaded} sent, ${result.downloaded} received.",
+                            Snackbar.LENGTH_LONG,
+                        ).show()
+                    }
+                    updateCloudSyncStatus()
                 }
-                is VaultSetupResult.Error -> Snackbar.make(contentHost, result.message, Snackbar.LENGTH_LONG).show()
-                else -> Snackbar.make(contentHost, "The encrypted vault could not be recovered.", Snackbar.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun runEncryptedSync(showResult: Boolean) {
-        if (!store.vaultRecoveryAcknowledged || !account.cloudServicesAllowed) return
-        scope.launch {
-            when (val result = withContext(Dispatchers.IO) { sync.syncNow() }) {
-                is SyncResult.Success -> if (showResult) {
-                    Snackbar.make(
-                        contentHost,
-                        "Encrypted sync complete: ${result.uploaded} uploaded, ${result.downloaded} downloaded.",
-                        Snackbar.LENGTH_LONG,
-                    ).show()
+                is SyncResult.Error -> {
+                    cloudSyncStatus?.text = result.message
+                    if (showResult) Snackbar.make(contentHost, result.message, Snackbar.LENGTH_LONG).show()
                 }
-                SyncResult.NeedsRecovery -> if (showResult) showRecoveryImportOptions()
-                is SyncResult.Error -> if (showResult) Snackbar.make(contentHost, result.message, Snackbar.LENGTH_LONG).show()
             }
+            historySyncSwitch?.let { switch ->
+                if (switch.isChecked != store.historySyncEnabled) setSwitchSilently(switch, store.historySyncEnabled)
+            }
+            updateRetentionSummary()
             refreshHome(); refreshHistory(); refreshDictionary()
         }
+    }
+
+    private fun updateCloudSyncStatus() {
+        val last = store.lastSyncAtMs
+        cloudSyncStatus?.text = when {
+            !account.signedIn -> ""
+            last <= 0L -> "Not synced yet on this phone"
+            else -> "Last synced ${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(java.util.Date(last))}"
+        }
+    }
+
+    private fun onHistorySyncToggled(enabled: Boolean) {
+        val switch = historySyncSwitch ?: return
+        if (enabled) {
+            updateHistorySync(true)
+            return
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Stop syncing history?")
+            .setMessage("WoVoice will delete the dictated text stored in your account. History already on this phone and your other devices stays there; new dictations stay on the device that made them.")
+            .setNegativeButton("Keep syncing") { _, _ -> setSwitchSilently(switch, true) }
+            .setOnCancelListener { setSwitchSilently(switch, true) }
+            .setPositiveButton("Stop and delete") { _, _ -> updateHistorySync(false) }
+            .show()
+    }
+
+    private fun updateHistorySync(enabled: Boolean) {
+        scope.launch {
+            when (val result = withContext(Dispatchers.IO) { sync.updateSettings(historySyncEnabled = enabled) }) {
+                is AccountResult.Success -> {
+                    Snackbar.make(
+                        contentHost,
+                        if (enabled) "History syncs to your account again." else "History is no longer stored in your account.",
+                        Snackbar.LENGTH_LONG,
+                    ).show()
+                    if (enabled) runCloudSync(showResult = false)
+                }
+                is AccountResult.Error -> {
+                    historySyncSwitch?.let { setSwitchSilently(it, !enabled) }
+                    Snackbar.make(contentHost, result.message, Snackbar.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun setSwitchSilently(switch: SwitchMaterial, checked: Boolean) {
+        switch.setOnCheckedChangeListener(null)
+        switch.isChecked = checked
+        switch.setOnCheckedChangeListener { _, value -> onHistorySyncToggled(value) }
+    }
+
+    private fun retentionSummary(): String = when (val days = store.historyRetentionDays) {
+        null -> "Keep history until you delete it"
+        365 -> "Delete dictations older than 1 year on every device"
+        else -> "Delete dictations older than $days days on every device"
+    }
+
+    private fun updateRetentionSummary() {
+        (((retentionAction as? ViewGroup)?.getChildAt(0) as? ViewGroup)?.getChildAt(1) as? TextView)?.text = retentionSummary()
+    }
+
+    private fun chooseRetention() {
+        val options = listOf<Int?>(null, 30, 90, 365)
+        val labels = arrayOf("Never", "After 30 days", "After 90 days", "After 1 year")
+        val current = options.indexOf(store.historyRetentionDays).coerceAtLeast(0)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Auto-delete history")
+            .setSingleChoiceItems(labels, current) { dialog, index ->
+                dialog.dismiss()
+                val days = options[index]
+                scope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        sync.updateSettings(historyRetentionDays = days, clearRetention = days == null)
+                    }
+                    when (result) {
+                        is AccountResult.Success -> {
+                            updateRetentionSummary()
+                            refreshHistory(); refreshHome()
+                        }
+                        is AccountResult.Error -> Snackbar.make(contentHost, result.message, Snackbar.LENGTH_LONG).show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun showAccountRestriction() {
@@ -1128,7 +1056,7 @@ class SetupActivity : AppCompatActivity() {
         store.acknowledgedPolicyVersion = POLICY_VERSION
         Snackbar.make(
             contentHost,
-            "WoVoice’s Privacy Policy and Terms now explain account moderation and operational-data retention.",
+            "Sync no longer needs a recovery key: your history and dictionary are stored encrypted in your WoVoice account. Review the updated Privacy Policy.",
             Snackbar.LENGTH_LONG,
         ).setAction("Review") { openServicePage("/privacy") }.show()
     }
@@ -1179,7 +1107,6 @@ class SetupActivity : AppCompatActivity() {
                         else repository.renameTerm(entry, field.text.toString())
                     }
                     if (!saved) Snackbar.make(contentHost, "That term is invalid or already exists.", Snackbar.LENGTH_SHORT).show()
-                    syncGlossaryCache()
                     refreshDictionary()
                 }
             }
@@ -1189,7 +1116,6 @@ class SetupActivity : AppCompatActivity() {
     private fun acceptSuggestion(entry: DictionaryEntry) {
         scope.launch {
             withContext(Dispatchers.IO) { repository.acceptSuggestion(entry) }
-            syncGlossaryCache()
             refreshDictionary()
             Snackbar.make(contentHost, "Added “${entry.term}” to your dictionary.", Snackbar.LENGTH_SHORT).show()
         }
@@ -1198,14 +1124,8 @@ class SetupActivity : AppCompatActivity() {
     private fun deleteDictionaryEntry(entry: DictionaryEntry) {
         scope.launch {
             withContext(Dispatchers.IO) { repository.deleteDictionary(entry) }
-            syncGlossaryCache()
             refreshDictionary()
         }
-    }
-
-    private suspend fun syncGlossaryCache() {
-        val values = withContext(Dispatchers.IO) { repository.bestGlossary() }
-        store.glossary = values
     }
 
     private fun showHistoryDetail(record: DictationRecord) {
@@ -1253,9 +1173,16 @@ class SetupActivity : AppCompatActivity() {
         }
     }
 
+    // Deletions sync with the account: the old wording promised "this phone"
+    // only while the text also vanished from every other device.
+    private fun syncedDeletionScope(historyOnly: Boolean): String {
+        val synced = account.signedIn && (!historyOnly || store.historySyncEnabled)
+        return if (synced) "this phone, your account, and your other devices" else "this phone"
+    }
+
     private fun confirmClearHistory() = confirm(
         "Clear history?",
-        "Generated text will be removed from this phone. Anonymous analytics totals will remain.",
+        "Generated text will be removed from ${syncedDeletionScope(historyOnly = true)}. Anonymous analytics totals will remain.",
         "Clear",
     ) {
         scope.launch {
@@ -1266,7 +1193,7 @@ class SetupActivity : AppCompatActivity() {
 
     private fun confirmResetAnalytics() = confirm(
         "Reset analytics?",
-        "Dictation totals, timing, WPM, and estimated usage will be removed. History text will remain.",
+        "Dictation totals, timing, WPM, and estimated usage will be removed from ${syncedDeletionScope(historyOnly = false)}. History text will remain.",
         "Reset",
     ) {
         scope.launch {
@@ -1277,11 +1204,14 @@ class SetupActivity : AppCompatActivity() {
 
     private fun confirmClearAll() = confirm(
         "Clear all local data?",
-        "This removes history, analytics, dictionary, Worker connection, and the encrypted token.",
+        "This removes history, analytics, dictionary, Worker connection, and the encrypted token from this phone and signs it out. Copies already synced stay in your account.",
         "Clear all",
     ) {
         scope.launch {
             withContext(Dispatchers.IO) {
+                // Revoke the server session first: once the refresh token is wiped
+                // nothing on this phone could revoke it, and it stays valid for 30 days.
+                if (account.signedIn) account.logout()
                 repository.clearEveryAccountLocalData()
                 store.clearAll()
             }
@@ -1446,7 +1376,7 @@ class SetupActivity : AppCompatActivity() {
         setOnCheckedChangeListener { _, value -> onChanged(value) }
     }
 
-    private fun destructiveAction(title: String, summary: String, onAction: () -> Unit) = settingAction(title, summary, "Remove", onAction).apply {
+    private fun destructiveAction(title: String, summary: String, action: String = "Remove", onAction: () -> Unit) = settingAction(title, summary, action, onAction).apply {
         (getChildAt(1) as? TextView)?.setTextColor(ERROR)
     }
 
@@ -1570,7 +1500,7 @@ class SetupActivity : AppCompatActivity() {
         const val TAB_SETTINGS = 1_104
         const val STATE_TAB = "dashboard_tab"
         const val STATE_PERIOD = "analytics_period"
-        const val POLICY_VERSION = "2026-08-05-admin-v1"
+        const val POLICY_VERSION = "2026-09-26-cloud-sync"
         val BACKGROUND = Color.rgb(23, 22, 27)
         val NAVIGATION = Color.rgb(29, 28, 34)
         val CARD = Color.rgb(36, 35, 41)

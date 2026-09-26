@@ -26,6 +26,18 @@ class TextCommitPolicyTest {
     }
 
     @Test
+    fun sentenceStartLooksPastTrailingSpaces() {
+        assertTrue(TextCommitPolicy.isSentenceStartAfter(null))
+        assertTrue(TextCommitPolicy.isSentenceStartAfter(""))
+        assertTrue(TextCommitPolicy.isSentenceStartAfter("   "))
+        assertTrue(TextCommitPolicy.isSentenceStartAfter("Hello. "))
+        assertTrue(TextCommitPolicy.isSentenceStartAfter("Really?\u00A0\u00A0"))
+        assertTrue(TextCommitPolicy.isSentenceStartAfter("First line\n"))
+        assertFalse(TextCommitPolicy.isSentenceStartAfter("Hello "))
+        assertFalse(TextCommitPolicy.isSentenceStartAfter("Hello, "))
+    }
+
+    @Test
     fun unicodeDeleteCountsSurrogatePair() {
         assertEquals(2, DeletePolicy.utf16UnitsForLastCodePoint("a😀"))
         assertEquals(1, DeletePolicy.utf16UnitsForLastCodePoint("é"))

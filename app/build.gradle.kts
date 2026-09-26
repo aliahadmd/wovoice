@@ -13,8 +13,8 @@ android {
         applicationId = "com.aliahad.wovoice"
         minSdk = 24
         targetSdk = 36
-        versionCode = 7
-        versionName = "1.5.1"
+        versionCode = 8
+        versionName = "1.6.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -68,7 +68,6 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.recyclerview)
     implementation(libs.androidx.browser)
-    implementation(libs.zxing.android.embedded)
     ksp(libs.androidx.room.compiler)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(libs.junit)

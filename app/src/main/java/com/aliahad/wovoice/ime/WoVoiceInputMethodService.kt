@@ -39,6 +39,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.UUID
 import android.os.SystemClock
 
 class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.Listener,
@@ -177,7 +178,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
         }
         cancelActiveWork(resetState = false)
         captureSession = currentSession
-        sentenceStartForCapture = TextCommitPolicy.isSentenceStart(previousCharacter())
+        sentenceStartForCapture = TextCommitPolicy.isSentenceStartAfter(textBeforeCursor())
         state = KeyboardState.Recording
         keyboard?.setState(state)
         try {
@@ -309,8 +310,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
         networkJob = scope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    repository.importGlossary(settings.glossary)
-                    val glossary = repository.bestGlossary().ifEmpty { settings.glossary }
+                    val glossary = repository.bestGlossary()
                     val auth = account.validAccessToken()
                     if (auth is AccountResult.Error) {
                         TranscriptionClient.Result.Error(auth.message, auth.retryable, auth.code, auth.status)
@@ -391,22 +391,23 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
         val text = TextCommitPolicy.withLocalSpacing(previousCharacter(), result.text)
         val committed = text.isNotEmpty() && connection.commitText(text, 1)
         if (committed) {
+            val analyticsSyncId = UUID.randomUUID().toString()
             scope.launch(Dispatchers.IO) {
                 repository.recordSuccessfulDictation(
                     result = result,
                     committedText = result.text,
                     audioDurationMs = audioDurationMs,
                     keepHistory = settings.historyEnabled,
+                    analyticsSyncId = analyticsSyncId,
                 )
-                if (settings.vaultRecoveryAcknowledged && account.cloudServicesAllowed) {
-                    AndroidGraph.sync(this@WoVoiceInputMethodService).syncNow()
-                }
+                if (account.cloudServicesAllowed) AndroidGraph.sync(this@WoVoiceInputMethodService).syncNow()
             }
             if (settings.learningSuggestionsEnabled && EditorPolicy.allowsLearning(currentInputEditorInfo)) {
                 pendingCorrection = PendingCorrection(
                     session = currentSession,
                     generatedText = result.text,
                     createdAtUptimeMs = SystemClock.uptimeMillis(),
+                    analyticsSyncId = analyticsSyncId,
                 )
             }
         }
@@ -440,7 +441,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
         val suggestion = CorrectionLearning.suggestion(pending.generatedText, tail) ?: return
         pendingCorrection = null
         scope.launch(Dispatchers.IO) {
-            if (repository.addSuggestion(suggestion)) repository.noteCorrection()
+            if (repository.addSuggestion(suggestion)) repository.noteCorrection(pending.analyticsSyncId)
         }
     }
 
@@ -448,13 +449,16 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
         val sensitive = EditorPolicy.isSensitive(info?.inputType ?: 0)
         keyboard?.setVoiceEnabled(!sensitive)
         if (sensitive) state = KeyboardState.ManualKeyboard
-        keyboard?.updateEditor(info, TextCommitPolicy.isSentenceStart(previousCharacter()))
+        keyboard?.updateEditor(info, TextCommitPolicy.isSentenceStartAfter(textBeforeCursor()))
         keyboard?.setState(state)
     }
 
     private fun previousCharacter(): Char? = currentInputConnection
         ?.getTextBeforeCursor(1, 0)
         ?.lastOrNull()
+
+    private fun textBeforeCursor(): CharSequence? = currentInputConnection
+        ?.getTextBeforeCursor(SENTENCE_LOOKBACK_CHARS, 0)
 
     private fun isCaptureActive(): Boolean =
         sessions.isActive(captureSession) && captureSession == currentSession &&
@@ -495,11 +499,13 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
         const val CAPTURE_LOG_TAG = "WoVoiceCapture"
         const val CORRECTION_WINDOW_MS = 30_000L
         const val MAX_CORRECTION_WINDOW_CHARS = 256
+        const val SENTENCE_LOOKBACK_CHARS = 16
     }
 
     private data class PendingCorrection(
         val session: Long,
         val generatedText: String,
         val createdAtUptimeMs: Long,
+        val analyticsSyncId: String,
     )
 }

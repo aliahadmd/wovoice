@@ -23,22 +23,26 @@ class SettingsStore(context: Context) : AccountSettings {
             preferences.edit().putString(KEY_WORKER_URL, normalizeUrl(value)).apply()
         }
 
-    var glossary: List<String>
-        get() = (preferences.getString(KEY_GLOSSARY, "") ?: "")
-            .lineSequence()
-            .map(String::trim)
-            .filter(String::isNotEmpty)
-            .take(100)
-            .toList()
-        set(value) {
-            val cleaned = value.asSequence()
+    /**
+     * Returns the pre-Dictionary glossary once, then deletes the preference. Later
+     * builds reused the same key as a cache of the signed-in account's terms, and
+     * re-importing it on every launch and transcription leaked one account's terms
+     * into the next account and resurrected terms deleted on another device. Only
+     * an install that has never signed in can still hold a genuine legacy list.
+     */
+    fun takeLegacyGlossary(): List<String>? {
+        if (!preferences.contains(KEY_GLOSSARY)) return null
+        val legacy = if (lastAccountId == null) {
+            (preferences.getString(KEY_GLOSSARY, "") ?: "")
+                .lineSequence()
                 .map(String::trim)
                 .filter(String::isNotEmpty)
-                .distinct()
                 .take(100)
-                .joinToString("\n")
-            preferences.edit().putString(KEY_GLOSSARY, cleaned).apply()
-        }
+                .toList()
+        } else null
+        preferences.edit().remove(KEY_GLOSSARY).apply()
+        return legacy
+    }
 
     var historyEnabled: Boolean
         get() = preferences.getBoolean(KEY_HISTORY_ENABLED, true)
@@ -107,25 +111,27 @@ class SettingsStore(context: Context) : AccountSettings {
         get() = preferences.getString(KEY_ACKNOWLEDGED_POLICY_VERSION, null)
         set(value) = preferences.edit().putString(KEY_ACKNOWLEDGED_POLICY_VERSION, value).apply()
 
+    // Cloud sync (v2) keeps its own cursor: the old vault's cursor counts a different feed.
     override var syncCursor: Long
-        get() = preferences.getLong(KEY_SYNC_CURSOR, 0L)
-        set(value) = preferences.edit().putLong(KEY_SYNC_CURSOR, value.coerceAtLeast(0L)).apply()
+        get() = preferences.getLong(KEY_CLOUD_SYNC_CURSOR, 0L)
+        set(value) = preferences.edit().putLong(KEY_CLOUD_SYNC_CURSOR, value.coerceAtLeast(0L)).apply()
 
-    override var vaultRecoveryAcknowledged: Boolean
-        get() = preferences.getBoolean(KEY_VAULT_RECOVERY_ACKNOWLEDGED, false)
-        set(value) = preferences.edit().putBoolean(KEY_VAULT_RECOVERY_ACKNOWLEDGED, value).apply()
+    // Kept across sign-out: the one-time vault import for that account is done on this phone.
+    override var cloudSyncMigratedAccount: String?
+        get() = preferences.getString(KEY_CLOUD_SYNC_MIGRATED_ACCOUNT, null)
+        set(value) = preferences.edit().putString(KEY_CLOUD_SYNC_MIGRATED_ACCOUNT, value).apply()
 
-    // One record id per line; the coordinator caps the set before saving.
-    override var syncDeadLetters: Set<String>
-        get() = (preferences.getString(KEY_SYNC_DEAD_LETTERS, "") ?: "")
-            .lineSequence()
-            .filter(String::isNotEmpty)
-            .toSet()
-        set(value) {
-            preferences.edit()
-                .putString(KEY_SYNC_DEAD_LETTERS, value.take(MAX_DEAD_LETTERS).joinToString("\n"))
-                .apply()
-        }
+    override var historySyncEnabled: Boolean
+        get() = preferences.getBoolean(KEY_HISTORY_SYNC_ENABLED, true)
+        set(value) = preferences.edit().putBoolean(KEY_HISTORY_SYNC_ENABLED, value).apply()
+
+    override var historyRetentionDays: Int?
+        get() = preferences.getInt(KEY_HISTORY_RETENTION_DAYS, 0).takeIf { it > 0 }
+        set(value) = preferences.edit().putInt(KEY_HISTORY_RETENTION_DAYS, value ?: 0).apply()
+
+    override var lastSyncAtMs: Long
+        get() = preferences.getLong(KEY_LAST_SYNC_AT, 0L)
+        set(value) = preferences.edit().putLong(KEY_LAST_SYNC_AT, value).apply()
 
     // One emoji per line; dedupe and cap are applied by EmojiRecents before saving.
     var recentEmojis: List<String>
@@ -151,6 +157,10 @@ class SettingsStore(context: Context) : AccountSettings {
             .remove(KEY_SYNC_CURSOR)
             .remove(KEY_VAULT_RECOVERY_ACKNOWLEDGED)
             .remove(KEY_SYNC_DEAD_LETTERS)
+            .remove(KEY_CLOUD_SYNC_CURSOR)
+            .remove(KEY_HISTORY_SYNC_ENABLED)
+            .remove(KEY_HISTORY_RETENTION_DAYS)
+            .remove(KEY_LAST_SYNC_AT)
             .apply()
         secrets.clearAccount()
     }
@@ -185,7 +195,11 @@ class SettingsStore(context: Context) : AccountSettings {
         const val KEY_SYNC_CURSOR = "sync_cursor"
         const val KEY_VAULT_RECOVERY_ACKNOWLEDGED = "vault_recovery_acknowledged"
         const val KEY_SYNC_DEAD_LETTERS = "sync_dead_letters"
+        const val KEY_CLOUD_SYNC_CURSOR = "cloud_sync_cursor"
+        const val KEY_CLOUD_SYNC_MIGRATED_ACCOUNT = "cloud_sync_migrated_account"
+        const val KEY_HISTORY_SYNC_ENABLED = "history_sync_enabled"
+        const val KEY_HISTORY_RETENTION_DAYS = "history_retention_days"
+        const val KEY_LAST_SYNC_AT = "last_sync_at"
         const val KEY_RECENT_EMOJIS = "recent_emojis"
-        const val MAX_DEAD_LETTERS = 50
     }
 }

@@ -12,7 +12,7 @@ class SessionManager private constructor(
     private val settings: AccountSettings,
     baseUrlProvider: () -> String,
     deviceNameProvider: () -> String,
-) {
+) : SyncAccount {
     private val client = AccountClient(baseUrlProvider)
     private val refreshMutex = Mutex()
     private val deviceName = deviceNameProvider
@@ -23,13 +23,15 @@ class SessionManager private constructor(
     @Volatile private var user: AccountUser? = storedUser()
 
     val signedIn: Boolean get() = settings.isSignedIn()
-    val accountId: String? get() = settings.accountId
+    override val accountId: String? get() = settings.accountId
     val email: String? get() = settings.accountEmail
     val currentQuota: AccountQuota? get() = quota
     val currentUser: AccountUser? get() = user
     val role: AccountRole get() = user?.role ?: AccountRole.fromWire(settings.accountRole)
     val accountStatus: AccountStatus get() = user?.accountStatus ?: storedStatus()
-    val cloudServicesAllowed: Boolean get() = signedIn && !accountStatus.state.restricted
+    override val cloudServicesAllowed: Boolean get() = signedIn && !accountStatus.state.restricted
+    override val restrictionMessage: String get() = accountStatus.publicMessage
+        ?: "This account cannot use cloud sync right now. Contact ${accountStatus.supportEmail} for help."
 
     fun markRestricted(code: String, message: String, suspendedUntilMs: Long? = null) {
         val state = when (code) {
@@ -103,7 +105,7 @@ class SessionManager private constructor(
         }
     }
 
-    suspend fun validAccessToken(): AccountResult<String> {
+    override suspend fun validAccessToken(): AccountResult<String> {
         val current = accessToken
         if (!current.isNullOrBlank() && System.currentTimeMillis() < accessExpiresAtMs - EXPIRY_SKEW_MS) {
             return AccountResult.Success(current)
@@ -117,7 +119,7 @@ class SessionManager private constructor(
         }
     }
 
-    suspend fun refreshAfterRejected(rejectedToken: String): AccountResult<String> = refreshMutex.withLock {
+    override suspend fun refreshAfterRejected(rejectedToken: String): AccountResult<String> = refreshMutex.withLock {
         val current = accessToken
         if (!current.isNullOrBlank() && current != rejectedToken && System.currentTimeMillis() < accessExpiresAtMs) {
             AccountResult.Success(current)
