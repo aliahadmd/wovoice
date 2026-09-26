@@ -10,5 +10,15 @@ export const POLISH_INPUT_NEURONS_PER_MILLION = 18_182;
 export const POLISH_OUTPUT_NEURONS_PER_MILLION = 27_273;
 export const POLISH_INPUT_USD_PER_MILLION = 0.2;
 export const POLISH_OUTPUT_USD_PER_MILLION = 0.3;
-// Flat polish reservation added to every quota reservation, independent of text length.
-export const POLISH_RESERVE_NEURONS = 5;
+// Polish reservation added to every quota reservation. Completion records
+// min(actual, reserved), so the reserve must bound a whole cleanup call: the old
+// flat 5 neurons under-counted every glossary-heavy (up to 4,000 glossary chars)
+// or reasoning-heavy call against the global daily budget. Input stays under
+// ~2,000 tokens (prompt + glossary + 60 s of speech); output is capped by the
+// 1,500-token max_tokens ceiling in models.ts.
+export const POLISH_MAX_INPUT_TOKENS = 2_000;
+export const POLISH_MAX_OUTPUT_TOKENS = 1_500;
+export const POLISH_RESERVE_NEURONS = Math.ceil(
+  (POLISH_MAX_INPUT_TOKENS * POLISH_INPUT_NEURONS_PER_MILLION
+    + POLISH_MAX_OUTPUT_TOKENS * POLISH_OUTPUT_NEURONS_PER_MILLION) / 1_000_000,
+);

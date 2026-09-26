@@ -265,6 +265,8 @@ export async function processModerationNotifications(
 
   for (const notification of pending.results) {
     const monthKey = new Date(now).toISOString().slice(0, 7);
+    let counted = false;
+    let delivered = false;
     try {
       await env.DB.batch([
         env.DB.prepare(
@@ -274,6 +276,7 @@ export async function processModerationNotifications(
           "UPDATE service_monthly_usage SET moderation_emails = moderation_emails + 1 WHERE month_key = ?",
         ).bind(monthKey),
       ]);
+      counted = true;
       const email = await decryptString(env.PII_KEY, notification.email_ciphertext, notification.email_nonce);
       await services.sendModerationEmail(env, {
         to: email,
@@ -281,11 +284,19 @@ export async function processModerationNotifications(
         publicMessage: notification.public_message,
         effectiveUntil: notification.effective_until,
       });
+      delivered = true;
       await env.DB.prepare(
         `UPDATE moderation_notifications SET status = 'sent', attempts = attempts + 1,
            last_error = NULL, sent_at = ?, updated_at = ? WHERE id = ? AND status = 'pending'`,
       ).bind(Date.now(), Date.now(), notification.id).run();
     } catch (error) {
+      if (counted && !delivered) {
+        // Nothing was delivered: give the monthly email budget its slot back, as
+        // the verification-email path already does, or retries drain it.
+        await env.DB.prepare(
+          "UPDATE service_monthly_usage SET moderation_emails = MAX(0, moderation_emails - 1) WHERE month_key = ?",
+        ).bind(monthKey).run().catch(() => undefined);
+      }
       const attempts = notification.attempts + 1;
       const failed = attempts >= 3;
       const backoff = attempts === 1 ? 5 * 60_000 : attempts === 2 ? 30 * 60_000 : 2 * 60 * 60_000;
@@ -327,6 +338,11 @@ export async function cleanupModerationData(env: AppEnv, now = Date.now()): Prom
     env.DB.prepare("DELETE FROM daily_usage WHERE date_key < ?").bind(detailDate),
     env.DB.prepare("DELETE FROM service_daily_active_users WHERE date_key < ?").bind(detailDate),
     env.DB.prepare("DELETE FROM service_daily_aggregates WHERE date_key < ?").bind(aggregateDate),
+    // Settled reservations are bookkeeping only; without this every transcription
+    // left a row behind forever.
+    env.DB.prepare(
+      "DELETE FROM quota_reservations WHERE status IN ('completed', 'released') AND expires_at < ?",
+    ).bind(detailCutoff),
   ]);
 }
 
@@ -346,7 +362,7 @@ function integerOrNull(value: number | undefined): number | null {
   return value === undefined ? null : integer(value);
 }
 
-function safeFailure(error: unknown): string {
+export function safeFailure(error: unknown): string {
   const value = error instanceof Error ? `${error.name}: ${error.message}` : typeof error;
   return value
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu, "[redacted-email]")

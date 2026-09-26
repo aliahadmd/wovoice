@@ -59,6 +59,35 @@ export async function decryptString(secret: string, ciphertext: string, nonce: s
   return decoder.decode(plaintext);
 }
 
+export async function importAesKey(raw: Uint8Array): Promise<CryptoKey> {
+  if (raw.byteLength !== 32) throw new Error("AES keys must be 32 bytes");
+  return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+/** AES-GCM with a fresh nonce; `aad` binds the ciphertext to where it is stored. */
+export async function sealBytes(
+  key: CryptoKey,
+  plaintext: Uint8Array,
+  aad: string,
+): Promise<{ nonce: string; ciphertext: string }> {
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: nonce, additionalData: encoder.encode(aad) },
+    key,
+    plaintext,
+  );
+  return { nonce: base64Url(nonce), ciphertext: base64Url(new Uint8Array(ciphertext)) };
+}
+
+export async function openBytes(key: CryptoKey, nonce: string, ciphertext: string, aad: string): Promise<Uint8Array> {
+  const plaintext = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: fromBase64Url(nonce), additionalData: encoder.encode(aad) },
+    key,
+    fromBase64Url(ciphertext),
+  );
+  return new Uint8Array(plaintext);
+}
+
 export function timingSafeEqual(left: string, right: string): boolean {
   const a = encoder.encode(left);
   const b = encoder.encode(right);

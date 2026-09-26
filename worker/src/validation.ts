@@ -2,6 +2,9 @@ export function chooseSafePolish(rawText: string, candidate: string): string | n
   const raw = rawText.trim();
   const polished = candidate.trim();
   if (!raw || !polished) return null;
+  // Spoken text never opens with a JSON brace or bracket; a candidate that does is
+  // model plumbing leaking through, however similar its words look.
+  if (/^[{[]/u.test(polished) && !/^[{[]/u.test(raw)) return null;
   if (polished.length < raw.length * 0.45 || polished.length > raw.length * 1.7 + 40) return null;
 
   const rawNumbers = raw.match(/\d+(?:[.,:/-]\d+)*/g) ?? [];

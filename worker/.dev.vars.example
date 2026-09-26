@@ -1,1 +1,8 @@
-CLIENT_TOKEN=replace-with-a-long-random-device-token
+# Local-only secrets for `wrangler dev` (the production values live in Worker secrets).
+# The v1.2 shared CLIENT_TOKEN credential was removed; every protected route needs a user session.
+AUTH_MASTER_KEY=replace-with-a-long-random-hmac-secret
+# 32 random bytes, base64url without padding (e.g. `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`).
+PII_KEY=replace-with-32-random-bytes-base64url
+TURNSTILE_SECRET=replace-with-your-turnstile-secret
+# Key-encryption key for cloud sync: 32 random bytes, base64url, generated the same way as PII_KEY.
+SYNC_KEK=replace-with-32-random-bytes-base64url

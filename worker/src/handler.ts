@@ -15,6 +15,7 @@ import {
 import { productionServices } from "./models";
 import { parseOptions } from "./options";
 import { completeQuota, releaseQuota, reserveQuota, type QuotaReservation } from "./quota";
+import { handleRecordsRoute } from "./records";
 import { handleSyncRoute } from "./sync";
 import { recordActivity, recheckActiveAccount, requireActiveAccount } from "./moderation";
 import type { AdminServices, AppEnv, AuthServices, Principal, Services } from "./types";
@@ -106,20 +107,31 @@ export function createHandler(
         status = syncResponse.status;
         return syncResponse;
       }
+      const recordsResponse = await handleRecordsRoute(request, env, requestId);
+      if (recordsResponse) {
+        status = recordsResponse.status;
+        return recordsResponse;
+      }
 
       principal = await authenticateAccess(request, env);
       principal = await requireActiveAccount(env, principal);
-      const rate = await env.RATE_LIMITER.limit({ key: principal.userId });
-      if (!rate.success) {
-        throw new ApiError(429, "RATE_LIMITED", true, "Too many recordings. Please wait a moment.", 60);
-      }
 
       if (request.method === "GET" && url.pathname === "/v1/health") {
+        // Health checks share the generous per-user API budget; they used to
+        // spend the 10-per-minute recording budget meant for transcriptions.
+        const healthRate = await env.USER_API_RATE_LIMITER.limit({ key: principal.userId });
+        if (!healthRate.success) {
+          throw new ApiError(429, "RATE_LIMITED", true, "Too many requests. Please wait a moment.", 60);
+        }
         status = 200;
         return Response.json({ requestId, ok: true }, { status });
       }
       if (request.method !== "POST" || url.pathname !== "/v1/transcriptions") {
         throw new ApiError(404, "NOT_FOUND", false, "This endpoint does not exist.");
+      }
+      const rate = await env.RATE_LIMITER.limit({ key: principal.userId });
+      if (!rate.success) {
+        throw new ApiError(429, "RATE_LIMITED", true, "Too many recordings. Please wait a moment.", 60);
       }
       const contentType = request.headers.get("content-type") ?? "";
       if (!contentType.toLowerCase().startsWith("multipart/form-data;")) {

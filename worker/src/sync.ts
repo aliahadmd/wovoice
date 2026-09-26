@@ -2,6 +2,7 @@ import { authenticateAccess } from "./auth";
 import { ApiError, errorResponse } from "./errors";
 import { noStoreJson, readJson } from "./http";
 import { recordActivity, requireActiveAccount } from "./moderation";
+import { v1Sunset } from "./records";
 import type { AppEnv } from "./types";
 
 const ITEM_TYPES = new Set(["history", "dictionary", "analytics"]);
@@ -33,6 +34,14 @@ export async function handleSyncRoute(request: Request, env: AppEnv, requestId: 
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/v1/sync")) return null;
   const principal = await requireActiveAccount(env, await authenticateAccess(request, env));
+  // v1 is the recovery-key vault. It closes for an account once one of its devices
+  // has moved the vault's records to cloud sync (v2), and for everyone at the
+  // sunset; older apps are told to update instead of writing records nobody reads.
+  const legacy = await env.DB.prepare("SELECT sync_v1_migrated_at FROM users WHERE id = ?")
+    .bind(principal.userId).first<{ sync_v1_migrated_at: number | null }>();
+  if ((legacy?.sync_v1_migrated_at ?? null) !== null || v1Sunset(env)) {
+    throw new ApiError(426, "UPGRADE_REQUIRED", false, "Update WoVoice to keep syncing. Sync now works with just your account.");
+  }
   // Sync routes were previously unthrottled; every pull also writes activity
   // rows, so a runaway token could drive unbounded D1 usage. The ceiling is
   // high enough that multi-page pull loops never hit it.
@@ -131,6 +140,12 @@ export async function handleSyncRoute(request: Request, env: AppEnv, requestId: 
       throw new ApiError(400, "INVALID_REQUEST", false, "Send between 1 and 100 encrypted sync items.");
     }
     const writes = body.items.map(validateWrite);
+    // A repeated record passes the per-item version check twice, then the second
+    // write trips the version trigger and fails the whole batch as a "conflict"
+    // the client can never reconcile. Reject it as the malformed request it is.
+    if (new Set(writes.map((item) => `${item.type}:${item.id}`)).size !== writes.length) {
+      throw new ApiError(400, "INVALID_REQUEST", false, "Each encrypted record may appear only once per batch.");
+    }
     const vault = await env.DB.prepare("SELECT vault_key_version FROM users WHERE id = ?")
       .bind(principal.userId)
       .first<{ vault_key_version: number | null }>();

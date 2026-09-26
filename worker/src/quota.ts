@@ -1,4 +1,5 @@
 import { ApiError } from "./errors";
+import { safeFailure } from "./moderation";
 import {
   NOVA_NEURONS_PER_MINUTE,
   POLISH_RESERVE_NEURONS,
@@ -123,10 +124,23 @@ export async function releaseQuota(env: AppEnv, reservation: QuotaReservation): 
 export async function releaseExpiredReservations(env: AppEnv): Promise<number> {
   const rows = await env.DB.prepare(
     `SELECT id, date_key AS dateKey, audio_seconds AS audioSeconds, reserved_neurons AS reservedNeurons
-     FROM quota_reservations WHERE status = 'reserved' AND expires_at < ? LIMIT 100`,
+     FROM quota_reservations WHERE status = 'reserved' AND expires_at < ? ORDER BY expires_at LIMIT 100`,
   ).bind(Date.now()).all<QuotaReservation>();
-  for (const reservation of rows.results) await releaseQuota(env, reservation);
-  return rows.results.length;
+  let released = 0;
+  for (const reservation of rows.results) {
+    // One reservation that cannot be settled must not strand the rest of the batch.
+    try {
+      await releaseQuota(env, reservation);
+      released += 1;
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "reservation_release_failed",
+        reservationId: reservation.id,
+        reason: safeFailure(error),
+      }));
+    }
+  }
+  return released;
 }
 
 function secondsUntilUtcReset(now: number): number {
