@@ -77,7 +77,7 @@ Open WoVoice and go to **Settings → Setup**.
 5. Select **WoVoice** as the active keyboard.
 6. Under **Account**, tap **Sign in or create account**.
 7. Enter your email in the secure WoVoice page, complete the security check, and enter the six-digit code.
-8. Return to WoVoice and save the recovery key when encrypted sync is offered.
+8. Return to WoVoice. Your history and Dictionary now sync to your account automatically, with no recovery key to save.
 
 The Home readiness card should show:
 
@@ -286,7 +286,7 @@ Only approved terms may be included in later transcription requests. The surroun
 Settings is organized into these areas:
 
 - **Setup:** microphone permission, keyboard enablement, active-keyboard picker, and readiness.
-- **Account:** verified email, today’s free quota, sync state, recovery controls, signed-in devices, logout, and account deletion.
+- **Account:** verified email, today’s free quota, cloud sync status and **Sync now**, the **Sync history** and **Auto-delete history** choices, signed-in devices, logout, and account deletion.
 - **Voice & language:** English (India), light polish, punctuation, and spoken line commands.
 - **Keyboard:** haptics, animations, waveform, and manual keyboard preferences.
 - **History & analytics:** local History, cost display, clear History, and reset analytics.
@@ -314,9 +314,9 @@ WoVoice is designed to collect as little information as possible:
 - The active recording is written only to temporary app-private storage.
 - Temporary audio is deleted after success, failure, cancellation, timeout, keyboard dismissal, or cleanup.
 - History, analytics, and Dictionary entries are partitioned by account in the app's private phone storage.
-- Optional synchronization encrypts each approved record on the phone before upload. Cloudflare stores ciphertext, not readable history or Dictionary text.
-- The rotating refresh token and local vault key are encrypted with Android Keystore-backed AES-GCM.
-- The recovery secret is shown only after device-credential confirmation and can be transferred by manual key or offline QR scan.
+- Cloud sync stores your history, approved Dictionary entries, and analytics in your account, encrypted by the WoVoice service with a key unique to your account. The service can decrypt them to deliver them to your devices; the admin console never shows their contents.
+- Turn off **Sync history** to delete your dictated text from your account (local copies stay), or choose **Auto-delete history** to remove dictations older than 30 days, 90 days, or a year everywhere.
+- The rotating refresh token is encrypted with Android Keystore-backed AES-GCM.
 - Phone backups are disabled for WoVoice data.
 - Surrounding text, clipboard contents, contacts, typing history, and source-app identity are not sent.
 - Correction context stays on the phone; only approved Dictionary terms can be used as glossary hints.
@@ -330,7 +330,7 @@ Three different cleanup actions are available because they affect different info
 | **Reset analytics** | Anonymous daily usage totals and calculated insights. |
 | **Clear all data** | History, analytics, Dictionary data, and other local WoVoice information. |
 
-Account deletion requires a fresh email code and removes sessions, synchronized ciphertext, and identifiable service usage. See [Delete your account](https://wovoice.aliahad.com/delete-account).
+Account deletion requires a fresh email code and removes sessions, every synced record, and identifiable service usage. See [Delete your account](https://wovoice.aliahad.com/delete-account).
 
 ## Understanding messages and states
 
@@ -405,7 +405,7 @@ The destination app controls the requested editor action. WoVoice follows that r
 
 WoVoice is also available as a native macOS dictation app: hold a key anywhere,
 speak, release, and the polished text is pasted at your cursor — the same
-worker pipeline, account, quota, and end-to-end encrypted history sync as the
+worker pipeline, account, quota, and encrypted cloud history sync as the
 phone keyboard.
 
 ### Install on a new Mac
@@ -422,8 +422,8 @@ phone keyboard.
      text. It never reads your screen. Input Monitoring is deliberately *not*
      required.
 3. Sign in once from the **Account** tab (email OTP in your browser). Your
-   phone's dictation history syncs end-to-end encrypted when you paste your
-   recovery key.
+   phone's dictation history and Dictionary sync automatically — there is no
+   recovery key to copy between devices.
 
 ### Using it
 
