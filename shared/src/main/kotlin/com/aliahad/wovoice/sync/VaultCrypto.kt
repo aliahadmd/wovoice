@@ -12,6 +12,12 @@ import javax.crypto.spec.SecretKeySpec
 data class WrappedVaultKey(val wrappedKey: String, val nonce: String, val keyVersion: Int)
 data class EncryptedRecord(val nonce: String, val ciphertext: String)
 
+/**
+ * The old recovery-key vault (v1 sync). Cloud sync no longer encrypts on the
+ * device; this remains only so a device holding a vault key can import the
+ * vault once (see SyncCoordinator.importLegacyVault) and for the cross-platform
+ * vectors that pin the format until v1 is retired.
+ */
 object VaultCrypto {
     private val random = SecureRandom()
     private const val RECOVERY_PREFIX = "WV1"

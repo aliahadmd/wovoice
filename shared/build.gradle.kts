@@ -36,4 +36,7 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    // In-memory Room on the JVM for DAO tests; org.json is compileOnly above.
+    testImplementation(libs.androidx.sqlite.bundled)
+    testImplementation(libs.org.json)
 }

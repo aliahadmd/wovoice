@@ -16,6 +16,14 @@ object TextCommitPolicy {
 
     fun isSentenceStart(previousCharacter: Char?): Boolean =
         previousCharacter == null || previousCharacter == '\n' || previousCharacter in setOf('.', '!', '?')
+
+    /**
+     * Sentence boundary judged from the text before the cursor, looking past spaces:
+     * after "Hello. " the adjacent character is a space, which the single-character
+     * check reads as mid-sentence, so dictation lost its capital and the keyboard its shift.
+     */
+    fun isSentenceStartAfter(textBeforeCursor: CharSequence?): Boolean =
+        isSentenceStart(textBeforeCursor?.trimEnd { it == ' ' || it == '\t' || it == '\u00A0' }?.lastOrNull())
 }
 
 object DeletePolicy {

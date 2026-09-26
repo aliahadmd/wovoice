@@ -51,6 +51,12 @@ abstract class WoVoiceDao {
     @Query("UPDATE daily_usage SET correctionCount = correctionCount + 1 WHERE dateKey = :dateKey")
     abstract suspend fun noteCorrection(dateKey: String)
 
+    @Query("UPDATE daily_usage SET correctionCount = MAX(0, correctionCount - 1) WHERE dateKey = :dateKey")
+    protected abstract suspend fun withdrawCorrection(dateKey: String)
+
+    @Query("DELETE FROM daily_usage WHERE dateKey = :dateKey")
+    protected abstract suspend fun deleteUsage(dateKey: String)
+
     @Query(
         """SELECT * FROM dictionary_entries
            WHERE ownerAccountId IS :ownerAccountId AND status = :status
@@ -144,6 +150,19 @@ abstract class WoVoiceDao {
 
     @Query("UPDATE analytics_sync_events SET syncState = :state, syncVersion = :version WHERE ownerAccountId = :ownerAccountId AND syncId = :syncId")
     abstract suspend fun updateAnalyticsSync(ownerAccountId: String, syncId: String, state: String, version: Int)
+
+    // Settling a push must not clobber an edit made while it was in flight: the
+    // version always advances (so the next push is based on it), but only a
+    // record still 'queued' becomes 'synced'. One edited back to 'local' mid-push
+    // stays local and is re-staged; blindly writing 'synced' lost that edit.
+    @Query("UPDATE dictation_records SET syncVersion = :version, syncState = CASE WHEN syncState = 'queued' THEN 'synced' ELSE syncState END WHERE ownerAccountId = :ownerAccountId AND syncId = :syncId")
+    abstract suspend fun markHistoryPushed(ownerAccountId: String, syncId: String, version: Int)
+
+    @Query("UPDATE dictionary_entries SET syncVersion = :version, syncState = CASE WHEN syncState = 'queued' THEN 'synced' ELSE syncState END WHERE ownerAccountId = :ownerAccountId AND syncId = :syncId")
+    abstract suspend fun markDictionaryPushed(ownerAccountId: String, syncId: String, version: Int)
+
+    @Query("UPDATE analytics_sync_events SET syncVersion = :version, syncState = CASE WHEN syncState = 'queued' THEN 'synced' ELSE syncState END WHERE ownerAccountId = :ownerAccountId AND syncId = :syncId")
+    abstract suspend fun markAnalyticsPushed(ownerAccountId: String, syncId: String, version: Int)
 
     @Query("SELECT (SELECT COUNT(*) FROM dictation_records WHERE ownerAccountId IS NULL) + (SELECT COUNT(*) FROM daily_usage WHERE ownerAccountId IS NULL) + (SELECT COUNT(*) FROM dictionary_entries WHERE ownerAccountId IS NULL)")
     abstract suspend fun unassignedCount(): Int
@@ -249,6 +268,108 @@ abstract class WoVoiceDao {
             ),
         )
     }
+
+    /**
+     * Flags a dictation's analytics event as corrected (or not) and moves its day's
+     * correction count with it. The flag lives on the synced event, so corrections
+     * now reach other devices instead of staying in this phone's local totals.
+     */
+    @Transaction
+    open suspend fun setEventCorrected(event: AnalyticsSyncEvent, corrected: Boolean, dateKey: String, syncState: String) {
+        if (event.corrected != corrected) {
+            if (corrected) noteCorrection(dateKey) else withdrawCorrection(dateKey)
+        }
+        updateAnalyticsEvent(event.copy(corrected = corrected, syncState = syncState))
+    }
+
+    /**
+     * Deletes a synced analytics event and takes its contribution back out of its
+     * day's totals. "Reset analytics" on one device tombstones every event; other
+     * devices used to delete the events but keep counting them in their totals.
+     */
+    @Transaction
+    open suspend fun removeAnalyticsEvent(event: AnalyticsSyncEvent, dateKey: String) {
+        deleteAnalyticsBySyncId(event.ownerAccountId, event.syncId)
+        val current = dailyUsage(dateKey, event.ownerAccountId) ?: return
+        if (current.dictationCount <= 1) {
+            deleteUsage(dateKey)
+            return
+        }
+        val samples = current.processingSamplesMs.split(',').filter(String::isNotBlank).toMutableList()
+        samples.remove(event.processingMs.toString())
+        upsertUsage(
+            current.copy(
+                dictationCount = current.dictationCount - 1,
+                audioDurationMs = (current.audioDurationMs - event.audioDurationMs).coerceAtLeast(0),
+                wordCount = (current.wordCount - event.wordCount).coerceAtLeast(0),
+                processingTotalMs = (current.processingTotalMs - event.processingMs).coerceAtLeast(0),
+                processingSamplesMs = samples.joinToString(","),
+                polishedCount = (current.polishedCount - if (event.polished) 1 else 0).coerceAtLeast(0),
+                correctionCount = (current.correctionCount - if (event.corrected) 1 else 0).coerceAtLeast(0),
+                asrNeurons = (current.asrNeurons - event.asrNeurons).coerceAtLeast(0.0),
+                polishNeurons = (current.polishNeurons - event.polishNeurons).coerceAtLeast(0.0),
+                totalNeurons = (current.totalNeurons - event.asrNeurons - event.polishNeurons).coerceAtLeast(0.0),
+                estimatedCostUsd = (current.estimatedCostUsd - event.estimatedCostUsd).coerceAtLeast(0.0),
+            ),
+        )
+    }
+
+    /**
+     * Marks every record in an account partition as never uploaded and drops its
+     * outbox. Used when a new vault is created or the vault is reset: the server
+     * then holds nothing, and records marked synced to the old vault would
+     * otherwise never be uploaded again.
+     */
+    @Transaction
+    open suspend fun resetSyncState(ownerAccountId: String) {
+        resetHistorySync(ownerAccountId)
+        resetDictionarySync(ownerAccountId)
+        resetAnalyticsSync(ownerAccountId)
+        deleteAccountOutbox(ownerAccountId)
+    }
+
+    @Query("UPDATE dictation_records SET syncState = 'local', syncVersion = 0 WHERE ownerAccountId = :ownerAccountId")
+    protected abstract suspend fun resetHistorySync(ownerAccountId: String)
+
+    @Query("UPDATE dictionary_entries SET syncState = 'local', syncVersion = 0 WHERE ownerAccountId = :ownerAccountId")
+    protected abstract suspend fun resetDictionarySync(ownerAccountId: String)
+
+    @Query("UPDATE analytics_sync_events SET syncState = 'local', syncVersion = 0 WHERE ownerAccountId = :ownerAccountId")
+    protected abstract suspend fun resetAnalyticsSync(ownerAccountId: String)
+
+    /** Puts every record staged for an upload the server refused back into the 'local' state. */
+    @Transaction
+    open suspend fun returnQueuedToLocal(ownerAccountId: String) {
+        requeueHistory(ownerAccountId)
+        requeueDictionary(ownerAccountId)
+        requeueAnalytics(ownerAccountId)
+    }
+
+    /** History sync was turned off (its cloud copy deleted): re-upload everything if it comes back on. */
+    open suspend fun markHistoryUnsynced(ownerAccountId: String) = resetHistorySync(ownerAccountId)
+
+    /** Pending deletions; the outbox holds only these now that uploads are built from the rows themselves. */
+    @Query("SELECT * FROM encrypted_sync_outbox WHERE ownerAccountId = :ownerAccountId AND deleted = 1 ORDER BY createdAtMs LIMIT :limit")
+    abstract suspend fun outboxTombstones(ownerAccountId: String, limit: Int): List<EncryptedSyncOutboxItem>
+
+    @Query("SELECT * FROM encrypted_sync_outbox WHERE ownerAccountId = :ownerAccountId AND recordType = :type AND recordId = :recordId LIMIT 1")
+    abstract suspend fun outboxRecord(ownerAccountId: String, type: String, recordId: String): EncryptedSyncOutboxItem?
+
+    @Query("DELETE FROM encrypted_sync_outbox WHERE ownerAccountId = :ownerAccountId AND recordType = :type")
+    abstract suspend fun deleteOutboxType(ownerAccountId: String, type: String)
+
+    /** Local side of history retention; the server tombstones its own expired copies. */
+    @Query("DELETE FROM dictation_records WHERE ownerAccountId = :ownerAccountId AND createdAtMs < :cutoffMs")
+    abstract suspend fun deleteHistoryBefore(ownerAccountId: String, cutoffMs: Long)
+
+    @Query("UPDATE dictation_records SET syncState = 'local' WHERE ownerAccountId = :ownerAccountId AND syncState = 'queued'")
+    protected abstract suspend fun requeueHistory(ownerAccountId: String)
+
+    @Query("UPDATE dictionary_entries SET syncState = 'local' WHERE ownerAccountId = :ownerAccountId AND syncState = 'queued'")
+    protected abstract suspend fun requeueDictionary(ownerAccountId: String)
+
+    @Query("UPDATE analytics_sync_events SET syncState = 'local' WHERE ownerAccountId = :ownerAccountId AND syncState = 'queued'")
+    protected abstract suspend fun requeueAnalytics(ownerAccountId: String)
 
     @Transaction
     open suspend fun mergeRemoteAnalytics(event: AnalyticsSyncEvent, seed: DailyUsageAggregate) {
