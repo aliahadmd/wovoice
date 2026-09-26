@@ -3,8 +3,11 @@ import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { base64Url, sha256 } from "../src/crypto";
 import { buildUsage, createHandler } from "../src/handler";
-import { completeQuota, releaseQuota, reserveQuota } from "../src/quota";
+import { cleanupModerationData, processModerationNotifications } from "../src/moderation";
+import { completeQuota, releaseExpiredReservations, releaseQuota, reserveQuota } from "../src/quota";
+import { applyHistoryRetention, purgeLegacyVaults } from "../src/records";
 import type { AdminServices, AppEnv, AuthServices, Services } from "../src/types";
+import { extractCleanedText } from "../src/models";
 import { chooseSafePolish } from "../src/validation";
 import { validateWav } from "../src/wav";
 
@@ -86,16 +89,30 @@ describe("WoVoice Worker", () => {
   });
 
   it("enforces the transcription burst limiter", async () => {
-    const fixture = authFixture();
+    const services = fakeServices();
+    const fixture = authFixture(services);
     const signedIn = await registerAndSignIn("limited@example.com", fixture);
     const response = await fixture.handler(
-      new Request("https://worker.test/v1/health", { headers: bearer(signedIn.accessToken) }),
+      transcriptionRequest(makeWav(1), signedIn.accessToken),
       fakeEnv(false),
     );
     expect(response.status).toBe(429);
     expect((await response.json()) as object).toMatchObject({
       error: { code: "RATE_LIMITED", retryable: true },
     });
+    expect(services.transcribe).not.toHaveBeenCalled();
+  });
+
+  it("keeps health checks out of the recording budget", async () => {
+    const fixture = authFixture();
+    const signedIn = await registerAndSignIn("health@example.com", fixture);
+    const environment = fakeEnv(false);
+    const response = await fixture.handler(
+      new Request("https://worker.test/v1/health", { headers: bearer(signedIn.accessToken) }),
+      environment,
+    );
+    expect(response.status).toBe(200);
+    expect(environment.RATE_LIMITER.limit).not.toHaveBeenCalled();
   });
 
   it("validates and returns a polished transcription", async () => {
@@ -201,6 +218,31 @@ describe("passwordless accounts", () => {
     expect(attempts.map((response) => response.status).sort()).toEqual([200, 400]);
   });
 
+  it("stops counting guesses once a challenge is exhausted", async () => {
+    const fixture = authFixture();
+    const start = await fixture.handler(jsonRequest("/v1/auth/start", {
+      email: "exhausted@example.com",
+      turnstileToken: "turnstile-test-token",
+      codeChallenge: await sha256("v".repeat(64)),
+      termsAccepted: true,
+    }), fixture.environment);
+    const challengeId = ((await start.json()) as { challengeId: string }).challengeId;
+    const code = fixture.sent.at(-1)!.code;
+    const wrong = code === "000000" ? "111111" : "000000";
+    for (let attempt = 0; attempt < 7; attempt += 1) {
+      const response = await fixture.handler(
+        jsonRequest("/v1/auth/verify", { challengeId, code: wrong }),
+        fixture.environment,
+      );
+      expect(response.status).toBe(400);
+    }
+    const row = await fixture.environment.DB.prepare("SELECT attempts FROM login_challenges WHERE id = ?")
+      .bind(challengeId).first<{ attempts: number }>();
+    expect(row?.attempts).toBe(5);
+    const correct = await fixture.handler(jsonRequest("/v1/auth/verify", { challengeId, code }), fixture.environment);
+    expect(correct.status).toBe(400);
+  });
+
   it("returns a stable error at the exact monthly email ceiling", async () => {
     const fixture = authFixture();
     const monthKey = new Date().toISOString().slice(0, 7);
@@ -255,6 +297,105 @@ describe("passwordless accounts", () => {
     expect(usage).toMatchObject({ used_audio_seconds: 0, reserved_audio_seconds: 0 });
   });
 
+  it("settles reservations after a lapsed quota grant leaves usage above the base limit", async () => {
+    const fixture = authFixture();
+    const signedIn = await registerAndSignIn("lapsed-grant@example.com", fixture);
+    const me = await fixture.handler(
+      new Request("https://worker.test/v1/me", { headers: bearer(signedIn.accessToken) }),
+      fixture.environment,
+    );
+    const userId = ((await me.json()) as { user: { id: string } }).user.id;
+    const db = fixture.environment.DB;
+    await db.prepare("UPDATE users SET quota_limit_audio_seconds = 1200, quota_override_expires_at = ? WHERE id = ?")
+      .bind(Date.now() + 3_600_000, userId).run();
+    await db.prepare(
+      "INSERT INTO daily_usage(user_id, date_key, used_audio_seconds) VALUES(?, ?, 900)",
+    ).bind(userId, new Date().toISOString().slice(0, 10)).run();
+    const released = await reserveQuota(fixture.environment, userId, crypto.randomUUID(), 30);
+    const completed = await reserveQuota(fixture.environment, userId, crypto.randomUUID(), 20);
+
+    // The grant lapses (or an administrator clears it) while both are in flight.
+    await db.prepare("UPDATE users SET quota_override_expires_at = ? WHERE id = ?")
+      .bind(Date.now() - 5_000, userId).run();
+    await releaseQuota(fixture.environment, released);
+    await completeQuota(fixture.environment, completed, 1);
+
+    const usage = await db.prepare(
+      "SELECT used_audio_seconds, reserved_audio_seconds FROM daily_usage WHERE user_id = ?",
+    ).bind(userId).first<{ used_audio_seconds: number; reserved_audio_seconds: number }>();
+    expect(usage).toMatchObject({ used_audio_seconds: 920, reserved_audio_seconds: 0 });
+    const statuses = await db.prepare(
+      "SELECT status FROM quota_reservations WHERE id IN (?, ?) ORDER BY status",
+    ).bind(released.id, completed.id).all<{ status: string }>();
+    expect(statuses.results.map((row) => row.status)).toEqual(["completed", "released"]);
+    // Growth past the base limit is still refused once the grant is gone.
+    await expect(reserveQuota(fixture.environment, userId, crypto.randomUUID(), 1))
+      .rejects.toMatchObject({ code: "USER_QUOTA_EXCEEDED" });
+  });
+
+  it("prunes settled reservations but keeps in-flight ones", async () => {
+    const fixture = authFixture();
+    const signedIn = await registerAndSignIn("prune@example.com", fixture);
+    const me = await fixture.handler(
+      new Request("https://worker.test/v1/me", { headers: bearer(signedIn.accessToken) }),
+      fixture.environment,
+    );
+    const userId = ((await me.json()) as { user: { id: string } }).user.id;
+    const settled = await reserveQuota(fixture.environment, userId, crypto.randomUUID(), 2);
+    await completeQuota(fixture.environment, settled, 1);
+    const inFlight = await reserveQuota(fixture.environment, userId, crypto.randomUUID(), 2);
+    await cleanupModerationData(fixture.environment, Date.now() + 91 * 86_400_000);
+    const remaining = await fixture.environment.DB.prepare(
+      "SELECT id FROM quota_reservations WHERE id IN (?, ?)",
+    ).bind(settled.id, inFlight.id).all<{ id: string }>();
+    expect(remaining.results.map((row) => row.id)).toEqual([inFlight.id]);
+    await releaseQuota(fixture.environment, inFlight);
+    expect(await releaseExpiredReservations(fixture.environment)).toBeGreaterThanOrEqual(0);
+  });
+
+  it("returns the monthly email slot when a moderation notice fails to send", async () => {
+    const fixture = authFixture();
+    const signedIn = await registerAndSignIn("notice@example.com", fixture);
+    const me = await fixture.handler(
+      new Request("https://worker.test/v1/me", { headers: bearer(signedIn.accessToken) }),
+      fixture.environment,
+    );
+    const userId = ((await me.json()) as { user: { id: string } }).user.id;
+    const db = fixture.environment.DB;
+    const now = Date.now();
+    await db.prepare(
+      `INSERT INTO moderation_notifications
+        (id, user_id, action, public_message, effective_until, status, attempts, next_attempt_at, created_at, updated_at)
+       VALUES(?, ?, 'suspended', 'Paused.', NULL, 'pending', 0, ?, ?, ?)`,
+    ).bind(crypto.randomUUID(), userId, now - 1, now - 1, now - 1).run();
+    const monthKey = new Date(now).toISOString().slice(0, 7);
+    const before = await db.prepare("SELECT moderation_emails FROM service_monthly_usage WHERE month_key = ?")
+      .bind(monthKey).first<{ moderation_emails: number }>();
+    await processModerationNotifications(fixture.environment, {
+      sendModerationEmail: vi.fn(async () => { throw new Error("mail down"); }),
+    }, 25);
+    const after = await db.prepare("SELECT moderation_emails FROM service_monthly_usage WHERE month_key = ?")
+      .bind(monthKey).first<{ moderation_emails: number }>();
+    expect(after?.moderation_emails ?? 0).toBe(before?.moderation_emails ?? 0);
+  });
+
+  it("rejects a sync batch that repeats the same record", async () => {
+    const fixture = authFixture();
+    const signedIn = await registerAndSignIn("duplicate-sync@example.com", fixture);
+    await fixture.handler(jsonRequest("/v1/sync/vault", {
+      wrappedKey: "d3JhcHBlZA",
+      nonce: "bm9uY2U",
+      keyVersion: 1,
+      expectedKeyVersion: null,
+    }, signedIn.accessToken, "PUT"), fixture.environment);
+    const item = { id: "record-dup", type: "history", baseVersion: 0, keyVersion: 1, nonce: "YWJj", ciphertext: "ZGVm", deleted: false };
+    const response = await fixture.handler(jsonRequest("/v1/sync/batch", {
+      items: [item, { ...item, deleted: true }],
+    }, signedIn.accessToken), fixture.environment);
+    expect(response.status).toBe(400);
+    expect((await response.json()) as object).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
   it("stores only opaque encrypted sync items and reports optimistic conflicts", async () => {
     const fixture = authFixture();
     const signedIn = await registerAndSignIn("sync@example.com", fixture);
@@ -283,6 +424,147 @@ describe("passwordless accounts", () => {
     });
   });
 });
+
+describe("cloud sync (v2)", () => {
+  async function signedInUser(email: string) {
+    const fixture = authFixture();
+    const signedIn = await registerAndSignIn(email, fixture);
+    const me = await fixture.handler(
+      new Request("https://worker.test/v1/me", { headers: bearer(signedIn.accessToken) }),
+      fixture.environment,
+    );
+    const userId = ((await me.json()) as { user: { id: string } }).user.id;
+    const call = (path: string, init: { method?: string; body?: unknown } = {}) => fixture.handler(
+      init.body === undefined
+        ? new Request(`https://worker.test${path}`, { method: init.method ?? "GET", headers: bearer(signedIn.accessToken) })
+        : jsonRequest(path, init.body, signedIn.accessToken, init.method ?? "POST"),
+      fixture.environment,
+    );
+    return { fixture, userId, call, db: fixture.environment.DB };
+  }
+  const history = (id: string, text: string, baseVersion = 0) => ({
+    id, type: "history", baseVersion, deleted: false, payload: { schemaVersion: 1, text, createdAtMs: 1_790_000_000_000 },
+  });
+
+  it("stores records sealed with the account key and returns plain payloads", async () => {
+    const { call, db, userId } = await signedInUser("cloud@example.com");
+    const push = await call("/v2/sync/batch", { body: { items: [history("h1", "Meet Rahim at the clinic.")] } });
+    expect(push.status).toBe(200);
+    expect((await push.json()) as object).toMatchObject({ applied: [{ id: "h1", type: "history", version: 1 }] });
+    const stored = await db.prepare("SELECT ciphertext, nonce FROM sync_records WHERE user_id = ?")
+      .bind(userId).first<{ ciphertext: string; nonce: string }>();
+    expect(stored?.ciphertext).toBeTruthy();
+    expect(atob(stored!.ciphertext.replaceAll("-", "+").replaceAll("_", "/") + "==".slice(0, (4 - stored!.ciphertext.length % 4) % 4)))
+      .not.toContain("Rahim");
+    const user = await db.prepare("SELECT data_key_wrapped, data_key_kek_version FROM users WHERE id = ?")
+      .bind(userId).first<{ data_key_wrapped: string; data_key_kek_version: number }>();
+    expect(user?.data_key_wrapped).toBeTruthy();
+    expect(user?.data_key_kek_version).toBe(1);
+    const pull = await call("/v2/sync?cursor=0");
+    expect((await pull.json()) as object).toMatchObject({
+      hasMore: false,
+      items: [{ id: "h1", type: "history", version: 1, deleted: false, payload: { text: "Meet Rahim at the clinic." } }],
+      settings: { historySyncEnabled: true, historyRetentionDays: null, legacyVault: false },
+    });
+  });
+
+  it("keeps one change row per record and reports conflicts with the server copy", async () => {
+    const { call, db, userId } = await signedInUser("feed@example.com");
+    await call("/v2/sync/batch", { body: { items: [history("h1", "First draft.")] } });
+    await call("/v2/sync/batch", { body: { items: [history("h1", "Second draft.", 1)] } });
+    const feed = await db.prepare("SELECT COUNT(*) AS count FROM sync_record_changes WHERE user_id = ?")
+      .bind(userId).first<{ count: number }>();
+    expect(feed?.count).toBe(1);
+    const conflict = await call("/v2/sync/batch", { body: { items: [history("h1", "Stale edit.", 1)] } });
+    expect(conflict.status).toBe(409);
+    expect((await conflict.json()) as object).toMatchObject({
+      error: { code: "SYNC_CONFLICT" },
+      conflicts: [{ id: "h1", version: 2, payload: { text: "Second draft." } }],
+    });
+  });
+
+  it("turning history sync off deletes the cloud copy and refuses new history", async () => {
+    const { call, db, userId } = await signedInUser("private@example.com");
+    await call("/v2/sync/batch", { body: { items: [history("h1", "Private note.")] } });
+    const off = await call("/v2/sync/settings", { method: "PUT", body: { historySyncEnabled: false, historyRetentionDays: 30 } });
+    expect((await off.json()) as object).toMatchObject({ settings: { historySyncEnabled: false, historyRetentionDays: 30 } });
+    const left = await db.prepare("SELECT COUNT(*) AS count FROM sync_records WHERE user_id = ?")
+      .bind(userId).first<{ count: number }>();
+    expect(left?.count).toBe(0);
+    const refused = await call("/v2/sync/batch", { body: { items: [history("h2", "Another.")] } });
+    expect(refused.status).toBe(409);
+    expect((await refused.json()) as object).toMatchObject({ error: { code: "HISTORY_SYNC_DISABLED" } });
+    const invalid = await call("/v2/sync/settings", { method: "PUT", body: { historyRetentionDays: 7 } });
+    expect(invalid.status).toBe(400);
+  });
+
+  it("deletes history past the account's retention on every device", async () => {
+    const { call, db, userId } = await signedInUser("retention@example.com");
+    await call("/v2/sync/batch", { body: { items: [history("old", "Old note."), {
+      ...history("new", "New note."), payload: { text: "New note.", createdAtMs: Date.now() },
+    }] } });
+    await call("/v2/sync/settings", { method: "PUT", body: { historyRetentionDays: 30 } });
+    await db.prepare("UPDATE sync_records SET created_at = ? WHERE user_id = ? AND item_id = 'old'")
+      .bind(Date.now() - 31 * 86_400_000, userId).run();
+    expect(await applyHistoryRetention(fixtureEnv(db))).toBeGreaterThanOrEqual(1);
+    const pull = await call("/v2/sync?cursor=0");
+    const items = ((await pull.json()) as { items: Array<{ id: string; deleted: boolean }> }).items;
+    expect(items.find((item) => item.id === "old")).toMatchObject({ deleted: true });
+    expect(items.find((item) => item.id === "new")).toMatchObject({ deleted: false });
+  });
+
+  it("refuses dictionary terms beyond the account limit", async () => {
+    const { call, db, userId } = await signedInUser("dictionary-cap@example.com");
+    await db.prepare(
+      `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000)
+       INSERT INTO sync_records (user_id, item_type, item_id, version, key_version, nonce, ciphertext, deleted, created_at, modified_at)
+       SELECT ?, 'dictionary', 'd' || i, 1, 1, 'bm9uY2U', 'Y2lwaGVy', 0, 1, 1 FROM n`,
+    ).bind(userId).run();
+    const response = await call("/v2/sync/batch", { body: { items: [{
+      id: "one-more", type: "dictionary", baseVersion: 0, deleted: false,
+      payload: { term: "Kubernetes", normalizedTerm: "kubernetes", createdAtMs: 1 },
+    }] } });
+    expect(response.status).toBe(413);
+    expect((await response.json()) as object).toMatchObject({ error: { code: "STORAGE_LIMIT_REACHED" } });
+  });
+
+  it("re-wraps the account key after a SYNC_KEK rotation", async () => {
+    const { fixture, call, db, userId } = await signedInUser("rotation@example.com");
+    await call("/v2/sync/batch", { body: { items: [history("h1", "Before rotation.")] } });
+    fixture.environment.SYNC_KEK_PREVIOUS = fixture.environment.SYNC_KEK;
+    fixture.environment.SYNC_KEK = base64Url(new Uint8Array(32).fill(11));
+    fixture.environment.SYNC_KEK_VERSION = "2";
+    const pull = await call("/v2/sync?cursor=0");
+    expect((await pull.json()) as object).toMatchObject({ items: [{ payload: { text: "Before rotation." } }] });
+    const user = await db.prepare("SELECT data_key_kek_version FROM users WHERE id = ?")
+      .bind(userId).first<{ data_key_kek_version: number }>();
+    expect(user?.data_key_kek_version).toBe(2);
+  });
+
+  it("closes v1 sync once an account has migrated and purges its vault later", async () => {
+    const { call, db, userId } = await signedInUser("legacy@example.com");
+    await call("/v1/sync/vault", { method: "PUT", body: {
+      wrappedKey: "d3JhcHBlZA", nonce: "bm9uY2U", keyVersion: 1, expectedKeyVersion: null,
+    } });
+    const settings = await call("/v2/sync/settings");
+    expect((await settings.json()) as object).toMatchObject({ settings: { legacyVault: true } });
+    expect((await call("/v1/sync?cursor=0")).status).toBe(200);
+    await call("/v2/sync/migration", { body: {} });
+    const closed = await call("/v1/sync?cursor=0");
+    expect(closed.status).toBe(426);
+    expect((await closed.json()) as object).toMatchObject({ error: { code: "UPGRADE_REQUIRED" } });
+    await db.prepare("UPDATE users SET sync_v1_migrated_at = ? WHERE id = ?").bind(Date.now() - 31 * 86_400_000, userId).run();
+    await purgeLegacyVaults(fixtureEnv(db));
+    const user = await db.prepare("SELECT wrapped_vault_key FROM users WHERE id = ?").bind(userId).first<{ wrapped_vault_key: string | null }>();
+    expect(user?.wrapped_vault_key).toBeNull();
+  });
+});
+
+function fixtureEnv(db: D1Database): AppEnv {
+  const environment = fakeEnv();
+  environment.DB = db;
+  return environment;
+}
 
 describe("admin moderation", () => {
   it("redirects protected admin pages to the first-party login", async () => {
@@ -483,6 +765,25 @@ describe("admin moderation", () => {
   });
 });
 
+describe("cleanup response parsing", () => {
+  it("accepts any single-string object shape the model returns", () => {
+    expect(extractCleanedText('{"cleaned_transcript":"Hello there."}')).toBe("Hello there.");
+    expect(extractCleanedText('```json\n{"text":"Hi."}\n```')).toBe("Hi.");
+    expect(extractCleanedText('"Quoted."')).toBe("Quoted.");
+    expect(extractCleanedText("Plain prose.")).toBe("Plain prose.");
+  });
+
+  it("never passes JSON plumbing through as the transcript", () => {
+    expect(extractCleanedText('{"cleaned_transcript":"You can generate a new sign-in')).toBeNull();
+    expect(extractCleanedText('{"a":"one","b":"two"}')).toBeNull();
+    expect(extractCleanedText("[1, 2]")).toBeNull();
+    expect(chooseSafePolish(
+      "you can generate a new sign in value again",
+      '{"cleaned_transcript":"You can generate a new sign-in value again."}',
+    )).toBeNull();
+  });
+});
+
 describe("output safety", () => {
   it("accepts punctuation-only cleanup", () => {
     expect(chooseSafePolish("this works right", "This works, right?")).toBe("This works, right?");
@@ -649,6 +950,7 @@ function fakeEnv(rateSuccess = true): AppEnv {
     AUTH_MASTER_KEY: "test-auth-master-key-with-enough-entropy",
     PII_KEY,
     TURNSTILE_SECRET: "test-secret",
+    SYNC_KEK: base64Url(new Uint8Array(32).fill(9)),
   };
 }
 

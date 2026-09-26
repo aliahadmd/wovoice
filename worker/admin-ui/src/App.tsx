@@ -47,7 +47,7 @@ interface UserDetail extends UserSummary {
     overrideExpiresAt: number | null;
   };
   usage90d: { audioSeconds: number; requests: number; neurons: number };
-  encryptedSyncMetadata: Array<{ type: string; count: number; encryptedBytes: number }>;
+  syncMetadata: Array<{ type: string; count: number; storedBytes: number }>;
   sessions: Array<{ id: string; deviceName: string; createdAt: number; lastSeenAt: number }>;
   notifications: Array<{
     id: string;
@@ -310,7 +310,7 @@ function Overview({ onError }: { onError(message: string): void }) {
       <Metric label="Estimated AI cost" value={formatUsd(usage.estimatedCostUsd)} note={`${formatNumber(usage.neurons)} neurons`} />
     </div>
     <div className="dashboard-grid">
-      <Panel title="Service activity" kicker="DICTATION"><Summary rows={[["Median processing latency", transcription.medianLatencyMs === null ? "—" : `${formatNumber(transcription.medianLatencyMs)} ms`], ["Failed dictations", formatNumber(transcription.failed)], ["New accounts", formatNumber(users.newInPeriod)], ["Suspended / banned", `${users.suspended} / ${users.banned}`], ["Encrypted sync operations", formatNumber(service.syncOperations)]]} /></Panel>
+      <Panel title="Service activity" kicker="DICTATION"><Summary rows={[["Median processing latency", transcription.medianLatencyMs === null ? "—" : `${formatNumber(transcription.medianLatencyMs)} ms`], ["Failed dictations", formatNumber(transcription.failed)], ["New accounts", formatNumber(users.newInPeriod)], ["Suspended / banned", `${users.suspended} / ${users.banned}`], ["Sync operations", formatNumber(service.syncOperations)]]} /></Panel>
       <Panel title="Free beta budget" kicker="CAPACITY"><Summary rows={[["Global neurons today", `${formatNumber(usage.todayGlobalUsedNeurons + usage.todayGlobalReservedNeurons)} / ${formatNumber(usage.todayGlobalLimitNeurons)}`], ["Verification emails", formatNumber(service.verificationEmailsThisMonth)], ["Moderation emails", formatNumber(service.moderationEmailsThisMonth)], ["Monthly email budget", `${service.verificationEmailsThisMonth + service.moderationEmailsThisMonth} / ${service.monthlyEmailLimit}`], ["Cost reporting", "Estimated, not an invoice"]]} /></Panel>
     </div>
   </>;
@@ -367,7 +367,7 @@ function UserDetailView({ userId, onBack, onError }: { userId: string; onBack():
     <div className="detail-grid">
       <Panel title="Account"><Summary rows={[["Role", user.role], ["Created", formatDate(user.createdAt)], ["Verified", formatDate(user.verifiedAt)], ["Last active", formatDate(user.lastActivityAt)], ["Terms", user.termsVersion], ["Public message", user.status.publicMessage ?? "—"]]} /></Panel>
       <Panel title="90-day usage"><Summary rows={[["Dictation time", formatDuration(user.usage90d.audioSeconds)], ["Requests", formatNumber(user.usage90d.requests)], ["Neurons", formatNumber(user.usage90d.neurons)], ["Today", `${formatNumber(user.quota.todayUsedAudioSeconds)} / ${formatNumber(user.quota.limitAudioSeconds)} sec`], ["Quota expiry", formatDate(user.quota.overrideExpiresAt)]]} /></Panel>
-      <Panel title="Encrypted sync metadata"><Summary rows={user.encryptedSyncMetadata.map((item) => [capitalize(item.type), `${formatNumber(item.count)} · ${formatBytes(item.encryptedBytes)}`])} /></Panel>
+      <Panel title="Cloud sync records"><Summary rows={user.syncMetadata.map((item) => [capitalize(item.type), `${formatNumber(item.count)} · ${formatBytes(item.storedBytes)}`])} /></Panel>
       <Panel title="Recent activity" className="wide"><Timeline items={activity.map((item) => ({ id: item.id, title: humanize(item.type), detail: activityDetail(item), time: item.createdAt }))} /></Panel>
       <Panel title="Device sessions"><Summary rows={user.sessions.map((item) => [item.deviceName, formatDate(item.lastSeenAt)])} empty="No active Android sessions." /></Panel>
       <Panel title="Account notices"><div className="notice-list">{user.notifications.length === 0 ? <Empty>No moderation notices.</Empty> : user.notifications.map((item) => <div className="notice" key={item.id}><strong>{humanize(item.action)}</strong><small>{item.status} · {formatDate(item.sentAt ?? item.createdAt)}</small>{item.status === "failed" && <button className="text-button" onClick={() => setAction(`retry:${item.id}`)}>Retry</button>}</div>)}</div></Panel>

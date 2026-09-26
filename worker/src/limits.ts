@@ -1,4 +1,4 @@
-// Free-service ceilings. The D1 triggers created by migrations 0001 and 0003
+// Free-service ceilings. The D1 triggers created by migrations 0001, 0003, and 0005
 // enforce the audio, global-neuron, and monthly-email limits inside the database
 // (raise a limit via a new migration editing the trigger SQL, never only here).
 export const BASE_DAILY_AUDIO_SECONDS = 600;

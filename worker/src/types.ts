@@ -57,6 +57,14 @@ export type AppEnv = Omit<
   ENVIRONMENT: string;
   SUPPORT_EMAIL?: string;
   ADMIN_BOOTSTRAP_EMAIL?: string;
+  /** Key-encryption key (32 bytes, base64url) wrapping each account's sync data key. */
+  SYNC_KEK: string;
+  /** Version of SYNC_KEK (default "1"); bump it when rotating in a new key. */
+  SYNC_KEK_VERSION?: string;
+  /** The key SYNC_KEK replaced, kept until every data key is re-wrapped. */
+  SYNC_KEK_PREVIOUS?: string;
+  /** When v1 (recovery-key vault) sync closes for every account, as an ISO date. */
+  SYNC_V1_SUNSET_AT?: string;
 };
 
 export interface AuthServices {

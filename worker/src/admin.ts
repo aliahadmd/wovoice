@@ -664,10 +664,11 @@ async function userDetail(env: AppEnv, requestId: string, userId: string): Promi
               revoked_at AS revokedAt, absolute_expires_at AS absoluteExpiresAt
        FROM sessions WHERE user_id = ? ORDER BY last_seen_at DESC LIMIT 25`,
     ).bind(userId).all(),
+    // Counts and sizes only; record contents are never read here.
     env.DB.prepare(
       `SELECT item_type AS type, COUNT(*) AS count,
-              COALESCE(SUM(LENGTH(ciphertext)), 0) AS encryptedBytes
-       FROM sync_items WHERE user_id = ? GROUP BY item_type`,
+              COALESCE(SUM(LENGTH(ciphertext)), 0) AS storedBytes
+       FROM sync_records WHERE user_id = ? AND deleted = 0 GROUP BY item_type`,
     ).bind(userId).all(),
     env.DB.prepare(
       `SELECT id, action, public_message AS publicMessage, effective_until AS effectiveUntil,
@@ -699,7 +700,7 @@ async function userDetail(env: AppEnv, requestId: string, userId: string): Promi
         requests: usage?.requests ?? 0,
       },
       sessions: sessions.results,
-      encryptedSyncMetadata: syncCounts.results,
+      syncMetadata: syncCounts.results,
       notifications: notifications.results,
     },
   });

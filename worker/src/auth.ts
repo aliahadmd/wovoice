@@ -18,7 +18,7 @@ const AUTHORIZATION_CODE_MS = 60_000;
 const ACCESS_TOKEN_MS = 15 * 60_000;
 const REFRESH_TOKEN_MS = 30 * 24 * 60 * 60_000;
 const SESSION_ABSOLUTE_MS = 180 * 24 * 60 * 60_000;
-const POLICY_VERSION = "2026-08-05-admin-v1";
+const POLICY_VERSION = "2026-09-26-cloud-sync";
 
 interface ChallengeRow {
   id: string;
@@ -260,6 +260,13 @@ async function startAuthentication(
 }
 
 async function verifyCode(request: Request, env: AppEnv, requestId: string): Promise<Response> {
+  // Code guesses were unthrottled; the five-attempt cap bounds success, but every
+  // guess still cost D1 work. Bound the request rate per client address.
+  const clientAddress = request.headers.get("cf-connecting-ip") ?? "unknown";
+  const rate = await env.USER_API_RATE_LIMITER.limit({ key: `auth-verify:${clientAddress}` });
+  if (!rate.success) {
+    throw new ApiError(429, "RATE_LIMITED", true, "Too many attempts. Please wait a moment.", 60);
+  }
   const body = await readJson<{ challengeId?: unknown; code?: unknown }>(request);
   const challengeId = typeof body.challengeId === "string" ? body.challengeId : "";
   const code = typeof body.code === "string" ? body.code.trim() : "";
@@ -268,7 +275,10 @@ async function verifyCode(request: Request, env: AppEnv, requestId: string): Pro
     .bind(challengeId)
     .first<ChallengeRow>();
   const now = Date.now();
-  if (!challenge || challenge.consumed_at !== null || challenge.expires_at < now) invalidCode();
+  // An exhausted challenge can never succeed; reject it without another write.
+  if (!challenge || challenge.consumed_at !== null || challenge.expires_at < now || challenge.attempts >= 5) {
+    invalidCode();
+  }
   const candidateHash = await hmac(env.AUTH_MASTER_KEY, `otp:${challenge.id}:${code}`);
   if (!timingSafeEqual(candidateHash, challenge.code_hash)) {
     await env.DB.prepare("UPDATE login_challenges SET attempts = attempts + 1 WHERE id = ? AND consumed_at IS NULL")

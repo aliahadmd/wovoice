@@ -1,3 +1,4 @@
+import { POLISH_MAX_OUTPUT_TOKENS } from "./pricing";
 import type { AsrResult, PolishResult, Services, TranscriptionOptions } from "./types";
 
 const WHISPER_MODEL = "@cf/openai/whisper-large-v3-turbo" as const;
@@ -72,7 +73,7 @@ export const productionServices: Services = {
           },
         ],
         temperature: 0,
-        max_tokens: Math.min(1_500, Math.max(120, rawText.length * 2)),
+        max_tokens: Math.min(POLISH_MAX_OUTPUT_TOKENS, Math.max(120, rawText.length * 2)),
         response_format: {
           type: "json_schema",
           json_schema: {
@@ -92,22 +93,12 @@ export const productionServices: Services = {
     const content = response.choices?.[0]?.message.content;
     if (!content) throw new Error("Cleanup returned no text");
     // gpt-oss-20b does not reliably honor response_format's property name: it
-    // has been observed returning {"transcript": "..."} against a schema named
-    // "text", and may fence JSON in markdown. Accept every benign shape — the
-    // chooseSafePolish gate still vets whatever we extract.
-    const unfenced = content.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-    let cleaned: string | null = null;
-    try {
-      const parsed: unknown = JSON.parse(unfenced);
-      if (isRecord(parsed)) {
-        if (typeof parsed.text === "string") cleaned = parsed.text;
-        else if (typeof parsed.transcript === "string") cleaned = parsed.transcript;
-        else if (typeof parsed.cleaned === "string") cleaned = parsed.cleaned;
-      }
-    } catch {
-      // Not JSON — fall through and treat the whole content as the candidate.
-    }
-    if (cleaned === null && unfenced.length > 0) cleaned = unfenced;
+    // has been observed returning {"transcript": "..."} and {"cleaned_transcript":
+    // "..."} against a schema named "text", and may fence JSON in markdown. Accept
+    // any object holding exactly one string. Anything else that looks like JSON
+    // (another shape, or output truncated by max_tokens) is rejected: it used to
+    // fall through as the "cleaned text" and was pasted into the user's editor.
+    const cleaned = extractCleanedText(content);
     if (cleaned === null) throw new Error("Cleanup returned an invalid schema");
     const usage = response.usage;
     const inputTokens = usage && "prompt_tokens" in usage ? usage.prompt_tokens : usage?.input_tokens;
@@ -119,6 +110,25 @@ export const productionServices: Services = {
     };
   },
 };
+
+export function extractCleanedText(content: string): string | null {
+  const unfenced = content.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+  if (!unfenced) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(unfenced);
+  } catch {
+    // Plain prose is a usable candidate; broken JSON never is.
+    return /^[{["]/u.test(unfenced) ? null : unfenced;
+  }
+  if (typeof parsed === "string") return parsed;
+  if (!isRecord(parsed)) return null;
+  for (const key of ["text", "transcript", "cleaned"]) {
+    if (typeof parsed[key] === "string") return parsed[key];
+  }
+  const strings = Object.values(parsed).filter((value): value is string => typeof value === "string");
+  return strings.length === 1 ? strings[0] : null;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
