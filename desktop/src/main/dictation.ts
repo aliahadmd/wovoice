@@ -7,19 +7,30 @@ import { playSound } from './sounds'
 export interface DictationDeps {
   settings: { workerUrl: string }
   getToken: () => Promise<string>
+  /** Drops a cached access token the Worker rejected so getToken() refreshes. */
+  invalidateToken: (token: string) => void
   getGlossary: () => Promise<string[]>
   transcribe: (
     token: string,
     wav: Buffer,
     glossary: string[]
-  ) => Promise<{ text: string; polished: boolean; asrModel: string; requestId: string }>
+  ) => Promise<{
+    text: string
+    polished: boolean
+    asrModel: string
+    requestId: string
+    timingsMs: { asr: number; polish: number; total: number }
+  }>
   recordHistory: (entry: {
     text: string
     asrModel: string
     requestId: string
     durationMs: number
     polished: boolean
+    timingsMs: { asr: number; polish: number; total: number }
   }) => void
+  /** A session ended without the trigger being released (Esc, cancel, 60 s cap). */
+  onSessionAborted?: () => void
 }
 
 export type OverlayState =
@@ -88,14 +99,15 @@ export class DictationService {
     else if (!this.processing) this.begin()
   }
 
-  begin(): void {
+  /** `releaseHint` names what ends the recording, e.g. "Release ⌘". */
+  begin(releaseHint = 'Release ⌥'): void {
     if (this.recording || this.processing) return
     console.log('[dictation] begin')
     const overlay = this.ensureOverlay()
     overlay.showInactive()
     this.recording = true
     playSound('start')
-    this.sendToOverlay(overlay, 'overlay:begin')
+    this.sendToOverlay(overlay, 'overlay:begin', releaseHint)
     // Esc cancels the in-flight recording (a global grab for a few seconds).
     const escOk = globalShortcut.register('Escape', () => this.cancelUser())
     console.log('[dictation] esc-to-cancel registered:', escOk)
@@ -122,7 +134,22 @@ export class DictationService {
         state: 'cancelled'
       } satisfies OverlayState)
       this.hideAfter(1600)
+      // The trigger is still latched/held; without a reset the next tap only
+      // "stops" this already-cancelled session and is swallowed.
+      this.deps.onSessionAborted?.()
     }
+  }
+
+  /**
+   * The overlay reached the 60-second cap. It used to finish on its own while
+   * this service still thought it was recording, so the WAV was ignored as
+   * stale and the whole dictation was lost. End the session here instead.
+   */
+  autoStop(): void {
+    if (!this.recording) return
+    console.log('[dictation] 60-second limit reached')
+    this.end()
+    this.deps.onSessionAborted?.()
   }
 
   cancel(): void {
@@ -183,12 +210,12 @@ export class DictationService {
    * The window is created lazily on first use; a send during page load is
    * silently dropped, which would swallow the whole first dictation.
    */
-  private sendToOverlay(overlay: BrowserWindow, channel: string): void {
+  private sendToOverlay(overlay: BrowserWindow, channel: string, ...args: unknown[]): void {
     const webContents = overlay.webContents
     if (webContents.isLoading()) {
-      webContents.once('did-finish-load', () => webContents.send(channel))
+      webContents.once('did-finish-load', () => webContents.send(channel, ...args))
     } else {
-      webContents.send(channel)
+      webContents.send(channel, ...args)
     }
   }
 
@@ -211,13 +238,26 @@ export class DictationService {
         payload.durationMs, 'ms, speech =', payload.containsSpeech
       )
       if (!payload.containsSpeech) {
-        this.fail('No clear speech detected — try holding ⌥ a little longer')
+        this.fail('No clear speech detected — try speaking a little longer')
         return
       }
       this.sendState({ state: 'transcribing' })
-      const token = await this.deps.getToken()
+      const wav = Buffer.from(payload.wav)
       const glossary = await this.deps.getGlossary()
-      const outcome = await this.deps.transcribe(token, Buffer.from(payload.wav), glossary)
+      const token = await this.deps.getToken()
+      let outcome: Awaited<ReturnType<DictationDeps['transcribe']>>
+      try {
+        outcome = await this.deps.transcribe(token, wav, glossary)
+      } catch (error) {
+        // A token the server no longer accepts (expired early, or rotated away)
+        // gets one refresh-and-retry, as on the phone, before failing the dictation.
+        const rejected =
+          error instanceof WorkerError &&
+          (error.code === 'TOKEN_EXPIRED' || error.code === 'AUTH_REQUIRED')
+        if (!rejected) throw error
+        this.deps.invalidateToken(token)
+        outcome = await this.deps.transcribe(await this.deps.getToken(), wav, glossary)
+      }
       // Never log the transcript itself — stdout is a plaintext voice memo.
       console.log('[dictation] transcribed:', outcome.text.length, 'chars')
       await pasteText(outcome.text)
@@ -227,7 +267,8 @@ export class DictationService {
         asrModel: outcome.asrModel,
         requestId: outcome.requestId,
         durationMs: payload.durationMs,
-        polished: outcome.polished
+        polished: outcome.polished,
+        timingsMs: outcome.timingsMs
       })
       this.processing = false
       this.clearWatchdog()

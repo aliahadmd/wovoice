@@ -14,7 +14,9 @@ interface Profile {
   quota: {
     remainingAudioSeconds: number
     limitAudioSeconds: number
-    resetAtMs?: number
+    // The Worker sends `resetAt`; the old `resetAtMs` name never matched, so the
+    // reset time was never shown.
+    resetAt?: number
   } | null
 }
 
@@ -98,13 +100,32 @@ function Dashboard(): React.JSX.Element {
   const [version, setVersion] = useState('')
   const [loginItem, setLoginItem] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [policyNotice, setPolicyNotice] = useState(false)
+
+  useEffect(() => {
+    window.api
+      .policyNotice()
+      .then(setPolicyNotice)
+      .catch(() => setPolicyNotice(false))
+  }, [])
 
   const refreshPermissions = useCallback((): void => {
     window.api.permissionsCheck().then(setPermissions).catch(() => setPermissions(null))
   }, [])
 
   useEffect(() => {
-    window.api.authState().then(setAuth)
+    const loadProfile = (): void => {
+      window.api
+        .profile()
+        .then((value) => setProfile(value as Profile))
+        .catch(() => setProfile(null))
+    }
+    // The profile used to load only on a pushed auth event, so an app that
+    // started already signed in never showed the quota.
+    window.api.authState().then((state) => {
+      setAuth(state)
+      if (state.signedIn) loadProfile()
+    })
     window.api
       .settingsGet()
       .then(setSettings)
@@ -114,14 +135,8 @@ function Dashboard(): React.JSX.Element {
     refreshPermissions()
     return window.api.onAuthState((state) => {
       setAuth(state)
-      if (state.signedIn) {
-        window.api
-          .profile()
-          .then((value) => setProfile(value as Profile))
-          .catch(() => setProfile(null))
-      } else {
-        setProfile(null)
-      }
+      if (state.signedIn) loadProfile()
+      else setProfile(null)
     })
   }, [refreshPermissions])
 
@@ -175,7 +190,30 @@ function Dashboard(): React.JSX.Element {
       </header>
 
       <main className="content">
-        {tab === 'home' && <HomeTab signedIn={auth.signedIn} />}
+        {policyNotice && (
+          <div className="card undo">
+            <span>
+              Sync no longer needs a recovery key: your history and dictionary are stored encrypted
+              in your WoVoice account.
+            </span>
+            <button
+              className="action secondary"
+              onClick={() => {
+                void window.api.dismissPolicyNotice()
+                setPolicyNotice(false)
+              }}
+            >
+              Got it
+            </button>
+          </div>
+        )}
+        {tab === 'home' && (
+          <HomeTab
+            signedIn={auth.signedIn}
+            triggerLabel={triggerLabel(settings?.triggerKey ?? 'option')}
+            middleClick={settings?.middleClickEnabled === true}
+          />
+        )}
         {tab === 'history' && <HistoryTab />}
         {tab === 'dictionary' && <DictionaryTab />}
         {tab === 'account' && (
@@ -200,11 +238,11 @@ function Dashboard(): React.JSX.Element {
                           {Math.round(profile.quota.limitAudioSeconds)} seconds left
                         </span>
                       </div>
-                      {profile.quota.resetAtMs !== undefined && (
+                      {profile.quota.resetAt !== undefined && (
                         <div className="stat-row">
                           <span className="label">Quota resets</span>
                           <span className="value">
-                            {new Date(profile.quota.resetAtMs).toLocaleTimeString([], {
+                            {new Date(profile.quota.resetAt).toLocaleTimeString([], {
                               hour: '2-digit',
                               minute: '2-digit'
                             })}
@@ -369,7 +407,21 @@ function Dashboard(): React.JSX.Element {
   )
 }
 
-function HomeTab({ signedIn }: { signedIn: boolean }): React.JSX.Element {
+/** "⌥ Left Option (default)" → "⌥ Left Option", for sentences about the chosen key. */
+function triggerLabel(triggerKey: string): string {
+  const option = TRIGGER_KEY_OPTIONS.find((candidate) => candidate.id === triggerKey)
+  return (option?.label ?? '⌥ Left Option').replace(' (default)', '')
+}
+
+function HomeTab({
+  signedIn,
+  triggerLabel,
+  middleClick
+}: {
+  signedIn: boolean
+  triggerLabel: string
+  middleClick: boolean
+}): React.JSX.Element {
   const [period, setPeriod] = useState<Period>('today')
   const [stats, setStats] = useState<HomeStats | null>(null)
 
@@ -389,7 +441,10 @@ function HomeTab({ signedIn }: { signedIn: boolean }): React.JSX.Element {
     <>
       <div className="hero">
         <h1>Speak naturally. Get ready-to-use text.</h1>
-        <p>Hold ⌥ Option (or middle-click) anywhere on your Mac to dictate.</p>
+        <p>
+          Hold {triggerLabel}
+          {middleClick ? ' (or middle-click)' : ''} anywhere on your Mac to dictate.
+        </p>
       </div>
 
       <div className="card">
@@ -424,8 +479,8 @@ function HomeTab({ signedIn }: { signedIn: boolean }): React.JSX.Element {
         {stats === null || stats.recent.length === 0 ? (
           <p className="muted">
             {signedIn
-              ? 'Nothing yet — hold ⌥ Option anywhere and speak.'
-              : 'Sign in, then hold ⌥ Option anywhere and speak.'}
+              ? `Nothing yet — hold ${triggerLabel} anywhere and speak.`
+              : `Sign in, then hold ${triggerLabel} anywhere and speak.`}
           </p>
         ) : (
           stats.recent.map((record) => (
@@ -444,6 +499,7 @@ function HistoryTab(): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [rows, setRows] = useState<HistoryRow[]>([])
   const [undo, setUndo] = useState<HistoryRow | null>(null)
+  const [undoError, setUndoError] = useState<string | null>(null)
 
   const refresh = useCallback((q: string): void => {
     window.api
@@ -471,9 +527,10 @@ function HistoryTab(): React.JSX.Element {
 
   const restore = (): void => {
     if (undo === null) return
-    void window.api.historyRestore(undo.requestId).then(() => {
+    void window.api.historyRestore(undo.requestId).then((restored) => {
       refresh(query)
       setUndo(null)
+      setUndoError(restored ? null : 'Too late to undo — the deletion already synced.')
     })
   }
 
@@ -483,6 +540,7 @@ function HistoryTab(): React.JSX.Element {
         <h1>History</h1>
         <p>Dictations inserted on this Mac. Search, copy, delete with undo.</p>
       </div>
+      {undoError !== null && undo === null && <p className="error">{undoError}</p>}
       {undo !== null && (
         <div className="card undo">
           <span>
@@ -621,12 +679,32 @@ function DictionaryTab(): React.JSX.Element {
   )
 }
 
+const RETENTION_OPTIONS: Array<[number | null, string]> = [
+  [null, 'Never'],
+  [30, 'After 30 days'],
+  [90, 'After 90 days'],
+  [365, 'After 1 year']
+]
+
 function SyncCard({ signedIn }: { signedIn: boolean }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
-  const [recoveryKey, setRecoveryKey] = useState('')
-  const [importing, setImporting] = useState(false)
-  const [importResult, setImportResult] = useState<string | null>(null)
+  const [status, setStatus] = useState<{
+    lastSyncAt: number
+    historySyncEnabled: boolean
+    historyRetentionDays: number | null
+  } | null>(null)
+
+  const refreshStatus = useCallback((): void => {
+    window.api
+      .syncStatus()
+      .then(setStatus)
+      .catch(() => setStatus(null))
+  }, [])
+
+  useEffect(() => {
+    if (signedIn) refreshStatus()
+  }, [signedIn, refreshStatus])
 
   const runSync = (): void => {
     setBusy(true)
@@ -635,68 +713,92 @@ function SyncCard({ signedIn }: { signedIn: boolean }): React.JSX.Element {
       .syncNow()
       .then((outcome) => {
         if (outcome.kind === 'ok') {
-          setResult(`Synced — ${outcome.uploaded ?? 0} uploaded, ${outcome.downloaded ?? 0} downloaded.`)
-        } else if (outcome.kind === 'needs-recovery') {
-          setResult('This Mac needs your recovery key to unlock the encrypted vault.')
-        } else if (outcome.kind === 'reconciled') {
-          setResult('Changes were reconciled with another device. Sync again to continue.')
+          setResult(
+            outcome.warning ??
+              `Synced — ${outcome.uploaded ?? 0} sent, ${outcome.downloaded ?? 0} received.`
+          )
         } else {
           setResult(outcome.message ?? 'Sync failed.')
         }
       })
-      .finally(() => setBusy(false))
+      .catch(() => setResult('Sync failed.'))
+      .finally(() => {
+        setBusy(false)
+        refreshStatus()
+      })
   }
 
-  const importKey = (): void => {
-    setImporting(true)
-    setImportResult(null)
+  const update = (changes: { historySyncEnabled?: boolean; historyRetentionDays?: number | null }): void => {
+    setBusy(true)
     window.api
-      .importRecoveryKey(recoveryKey)
-      .then((ok) => {
-        setImportResult(ok ? 'Vault unlocked on this Mac.' : 'That recovery key does not match this account.')
-        if (ok) setRecoveryKey('')
+      .updateSyncSettings(changes)
+      .then((outcome) => {
+        if (!outcome.ok && !outcome.cancelled) setResult(outcome.message ?? 'The setting could not be saved.')
       })
-      .finally(() => setImporting(false))
+      .catch(() => setResult('The setting could not be saved.'))
+      .finally(() => {
+        setBusy(false)
+        refreshStatus()
+      })
   }
 
   if (!signedIn) {
     return (
       <div className="card">
-        <h2>Encrypted sync</h2>
-        <p className="muted">Sign in to sync your history and dictionary end-to-end encrypted.</p>
+        <h2>Cloud sync</h2>
+        <p className="muted">Sign in and your history and dictionary follow you to every device.</p>
       </div>
     )
   }
 
   return (
     <div className="card">
-      <h2>Encrypted sync</h2>
+      <h2>Cloud sync</h2>
       <p>
-        History and dictionary sync end-to-end encrypted with your phone. Paste the recovery
-        key from a signed-in device to unlock this Mac&apos;s vault.
+        History and dictionary sync through your WoVoice account, encrypted on WoVoice&apos;s
+        servers. Signing in on another device is all it takes.
       </p>
+      <div className="stat-row">
+        <span className="label">Last synced</span>
+        <span className="value">
+          {status === null || status.lastSyncAt === 0 ? 'Not yet' : formatWhen(status.lastSyncAt)}
+        </span>
+      </div>
+      <div className="stat-row">
+        <span className="label">Sync history</span>
+        <button
+          className={`action ${status?.historySyncEnabled === false ? 'secondary' : ''}`}
+          disabled={busy || status === null}
+          onClick={() => update({ historySyncEnabled: !(status?.historySyncEnabled ?? true) })}
+        >
+          {status === null ? '—' : status.historySyncEnabled ? 'On' : 'Off'}
+        </button>
+      </div>
+      <div className="stat-row">
+        <span className="label">Auto-delete history</span>
+        <select
+          className="select"
+          disabled={busy || status === null}
+          value={String(status?.historyRetentionDays ?? 'never')}
+          onChange={(event) =>
+            update({
+              historyRetentionDays: event.target.value === 'never' ? null : Number(event.target.value)
+            })
+          }
+        >
+          {RETENTION_OPTIONS.map(([days, label]) => (
+            <option key={label} value={days === null ? 'never' : String(days)}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </div>
       <p>
         <button className="action" onClick={runSync} disabled={busy}>
           {busy ? 'Syncing…' : 'Sync now'}
         </button>
       </p>
       {result !== null && <p className="mono">{result}</p>}
-      <div className="add-row" style={{ marginTop: 10 }}>
-        <input
-          className="search"
-          placeholder="WV1-… recovery key"
-          value={recoveryKey}
-          onChange={(event) => setRecoveryKey(event.target.value)}
-        />
-        <button
-          className="action secondary"
-          onClick={importKey}
-          disabled={importing || recoveryKey.trim().length === 0}
-        >
-          Import
-        </button>
-      </div>
-      {importResult !== null && <p className="mono">{importResult}</p>}
     </div>
   )
 }

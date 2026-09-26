@@ -44,7 +44,8 @@ const api = {
     audioDurationMs: number
   }>> => ipcRenderer.invoke('history:list', query),
   historyDelete: (requestId: string): Promise<void> => ipcRenderer.invoke('history:delete', requestId),
-  historyRestore: (requestId: string): Promise<void> => ipcRenderer.invoke('history:restore', requestId),
+  historyRestore: (requestId: string): Promise<boolean> =>
+    ipcRenderer.invoke('history:restore', requestId),
   historyCopy: (text: string): Promise<void> => ipcRenderer.invoke('history:copy', text),
   dictionaryList: (query: string): Promise<Array<{
     id: number
@@ -56,17 +57,36 @@ const api = {
   dictionaryAdd: (term: string): Promise<boolean> => ipcRenderer.invoke('dictionary:add', term),
   dictionaryDelete: (id: number): Promise<void> => ipcRenderer.invoke('dictionary:delete', id),
   setLoginItem: (openAtLogin: boolean): Promise<boolean> => ipcRenderer.invoke('app:setLoginItem', openAtLogin),
-  syncNow: (): Promise<{ kind: string; uploaded?: number; downloaded?: number; message?: string }> =>
-    ipcRenderer.invoke('sync:now'),
-  importRecoveryKey: (key: string): Promise<boolean> => ipcRenderer.invoke('sync:importKey', key),
+  syncNow: (): Promise<{
+    kind: string
+    uploaded?: number
+    downloaded?: number
+    message?: string
+    warning?: string
+  }> => ipcRenderer.invoke('sync:now'),
+  syncStatus: (): Promise<{
+    lastSyncAt: number
+    historySyncEnabled: boolean
+    historyRetentionDays: number | null
+  }> => ipcRenderer.invoke('sync:status'),
+  updateSyncSettings: (changes: {
+    historySyncEnabled?: boolean
+    historyRetentionDays?: number | null
+  }): Promise<{ ok: boolean; cancelled?: boolean; message?: string }> =>
+    ipcRenderer.invoke('sync:updateSettings', changes),
+  policyNotice: (): Promise<boolean> => ipcRenderer.invoke('app:policyNotice'),
+  dismissPolicyNotice: (): Promise<void> => ipcRenderer.invoke('app:dismissPolicyNotice'),
   getLoginItem: (): Promise<boolean> => ipcRenderer.invoke('app:getLoginItem'),
   overlay: {
     done: (payload: { wav: ArrayBuffer; durationMs: number; containsSpeech: boolean }): void =>
       ipcRenderer.send('overlay:done', payload),
     cancelled: (): void => ipcRenderer.send('overlay:cancelled'),
+    autoStop: (): void => ipcRenderer.send('overlay:autoStop'),
     fail: (message: string): void => ipcRenderer.send('overlay:fail', message),
-    onBegin: (listener: () => void): void => {
-      ipcRenderer.on('overlay:begin', () => listener())
+    onBegin: (listener: (releaseHint: string) => void): void => {
+      ipcRenderer.on('overlay:begin', (_event, releaseHint: unknown) =>
+        listener(typeof releaseHint === 'string' ? releaseHint : 'Release ⌥')
+      )
     },
     onEnd: (listener: () => void): void => {
       ipcRenderer.on('overlay:end', () => listener())

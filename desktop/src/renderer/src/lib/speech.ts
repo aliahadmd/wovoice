@@ -14,6 +14,8 @@ export class SpeechSignalDetector {
 
   /** Consumes one frame of Float32 samples (-1..1); returns its RMS (0..1). */
   observe(samples: Float32Array): number {
+    // An empty frame would yield NaN, and a NaN peak fails the speech gate forever.
+    if (samples.length === 0) return 0
     let squares = 0
     for (let i = 0; i < samples.length; i++) squares += samples[i] * samples[i]
     const rms = Math.sqrt(squares / samples.length)

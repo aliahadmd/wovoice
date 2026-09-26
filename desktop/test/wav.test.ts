@@ -43,6 +43,18 @@ test('resample interpolates amplitude smoothly (48 kHz → 16 kHz)', () => {
   assert.ok(Math.abs(outputCycles - inputCycles) <= 1)
 })
 
+test('downsampling attenuates content above the 8 kHz Nyquist limit', () => {
+  // Point-sampling a 12 kHz tone at 48 kHz → 16 kHz produced a full-strength
+  // 4 kHz alias inside the speech band.
+  const output = resample(sine(48_000, 48_000, 12_000, 0.5), 48_000, 16_000)
+  const rms = Math.sqrt(output.reduce((sum, value) => sum + value * value, 0) / output.length)
+  assert.ok(rms < 0.5 / Math.SQRT2 / 2, `alias rms ${rms}`)
+  // In-band speech energy passes nearly untouched.
+  const speech = resample(sine(48_000, 48_000, 300, 0.5), 48_000, 16_000)
+  const speechRms = Math.sqrt(speech.reduce((sum, value) => sum + value * value, 0) / speech.length)
+  assert.ok(speechRms > 0.5 / Math.SQRT2 * 0.95, `speech rms ${speechRms}`)
+})
+
 test('encodeWav writes a 16 kHz mono PCM header and clamps samples', () => {
   // 16 kHz source: no resampling, so samples map one-to-one into the stream.
   const samples = Float32Array.from([0, 0.5, -0.5, 1.5, -1.5])
