@@ -2,7 +2,7 @@ import { spawn, ChildProcess } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
 
-type Trigger = 'keyboard' | 'middle-click'
+export type Trigger = 'keyboard' | 'middle-click'
 
 interface TriggerSettings {
   keyboardShortcutEnabled: boolean
@@ -29,6 +29,21 @@ const TRIGGER_KEY_CODES: Record<string, number[]> = {
   fn: [63] // Globe key
 }
 
+const TRIGGER_KEY_LABELS: Record<string, string> = {
+  option: '⌥',
+  'option-right': 'right ⌥',
+  command: '⌘',
+  'command-right': 'right ⌘',
+  'caps-lock': '⇪',
+  fn: 'fn'
+}
+
+/** What ends a recording started by `trigger`, for the overlay's hint line. */
+export function releaseHint(trigger: Trigger, triggerKey: string): string {
+  if (trigger === 'middle-click') return 'Release the middle button'
+  return `Release ${TRIGGER_KEY_LABELS[triggerKey] ?? '⌥'}`
+}
+
 // CGEvent mouse button number for the center/middle button.
 const MOUSE_MIDDLE = 2
 
@@ -48,6 +63,7 @@ export class TriggerEngine {
   private latchStopPress = false
   private helper: ChildProcess | null = null
   private activeCodes: number[] = []
+  private pendingLine = ''
 
   constructor(
     private readonly settings: TriggerSettings,
@@ -74,8 +90,13 @@ export class TriggerEngine {
         stdio: ['pipe', 'pipe', 'pipe']
       })
       child.stdout?.setEncoding('utf-8')
+      this.pendingLine = ''
       child.stdout?.on('data', (chunk: string) => {
-        for (const line of chunk.split('\n')) {
+        // A pipe read can end mid-line; a split "k 58 " + "1" used to parse as a
+        // key-up (stopping the session) and drop the key-down that followed.
+        const lines = (this.pendingLine + chunk).split('\n')
+        this.pendingLine = lines.pop() ?? ''
+        for (const line of lines) {
           const [kind, value, state] = line.trim().split(' ')
           if (kind === 'k') this.onKeyLine(Number(value), state === '1')
           else if (kind === 'm') this.onMouseLine(Number(value), state === '1')
@@ -123,6 +144,21 @@ export class TriggerEngine {
     if (this.helper === null) return
     this.helper.kill()
     this.helper = null
+    // A restarted helper cannot know whether the key is still down; assume up so
+    // a stale "down" doesn't swallow the next real press.
+    this.triggerDown = false
+    this.reset()
+  }
+
+  /**
+   * Forgets the latch after a session ended without a trigger stop (Esc, the
+   * overlay's cancel button, the 60 s cap). The physical key state is kept so a
+   * still-held key's release is not mistaken for a new quick tap.
+   */
+  reset(): void {
+    this.lock = false
+    this.keyboardLatched = false
+    this.latchStopPress = this.triggerDown
   }
 
   private onKeyLine(keycode: number, down: boolean): void {

@@ -3,6 +3,7 @@ import { test, describe, beforeEach } from 'node:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { openDatabase, cleanTerm, normalize, escapeLike, type DictationRecord } from '../src/main/db'
 
 function makeRecord(overrides: Partial<DictationRecord> = {}): DictationRecord {
@@ -118,6 +119,43 @@ describe('dictionary', () => {
     const beta = entries.find((e) => e.term === 'Beta')
     assert.equal(alpha?.useCount, 1)
     assert.equal(beta?.useCount, 0)
+  })
+})
+
+describe('schema migration', () => {
+  test('upgrades a database created before sync existed', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'wovoice-')), 'legacy.db')
+    const legacy = new DatabaseSync(path)
+    // The pre-sync (E5) shape: dictionary_entries had no syncId.
+    legacy.exec(`
+      CREATE TABLE dictation_records (
+        requestId TEXT PRIMARY KEY, finalText TEXT NOT NULL, createdAtMs INTEGER NOT NULL,
+        zoneId TEXT NOT NULL, wordCount INTEGER NOT NULL, audioDurationMs INTEGER NOT NULL,
+        asrModel TEXT NOT NULL, polished INTEGER NOT NULL, asrMs INTEGER NOT NULL DEFAULT 0,
+        polishMs INTEGER NOT NULL DEFAULT 0, totalMs INTEGER NOT NULL DEFAULT 0,
+        deleted INTEGER NOT NULL DEFAULT 0, syncState TEXT NOT NULL DEFAULT 'local',
+        syncVersion INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE dictionary_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, term TEXT NOT NULL,
+        normalizedTerm TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'confirmed',
+        source TEXT NOT NULL DEFAULT 'manual', createdAtMs INTEGER NOT NULL,
+        lastUsedAtMs INTEGER NOT NULL, useCount INTEGER NOT NULL DEFAULT 0,
+        syncState TEXT NOT NULL DEFAULT 'local', syncVersion INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO dictionary_entries (term, normalizedTerm, createdAtMs, lastUsedAtMs)
+        VALUES ('Rahim', 'rahim', 1, 1), ('Dhaka', 'dhaka', 1, 1);
+    `)
+    legacy.close()
+
+    const db = openDatabase(path)
+    const pending = db.dictionaryNeedingSync()
+    assert.equal(pending.length, 2)
+    assert.equal(new Set(pending.map((entry) => entry.syncId)).size, 2)
+    assert.equal(db.addTerm('Chattogram'), true)
+    assert.equal(db.dictionaryNeedingSync().length, 3)
+    // Reopening an upgraded database is a no-op.
+    assert.equal(openDatabase(path).listTerms('').length, 3)
   })
 })
 

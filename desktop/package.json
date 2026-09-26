@@ -1,6 +1,6 @@
 {
   "name": "wovoice-desktop",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "WoVoice speech-first dictation for macOS",
   "main": "./out/main/index.js",
   "author": "Ali Ahad",

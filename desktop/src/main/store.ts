@@ -40,20 +40,46 @@ export class SettingsStore {
     return this.get<string>('workerUrl', 'https://wovoice.aliahad.com')
   }
 
+  // Cloud sync keeps its own cursor: the old vault's 'syncCursor' counts a different feed.
   get syncCursor(): number {
-    return this.get<number>('syncCursor', 0)
+    return this.get<number>('cloudSyncCursor', 0)
   }
 
   set syncCursor(value: number) {
-    this.set('syncCursor', value)
+    this.set('cloudSyncCursor', value)
   }
 
-  get vaultRecoveryAcknowledged(): boolean {
-    return this.get<boolean>('vaultRecoveryAcknowledged', false)
+  /** Account whose one-time move from the old recovery-key vault is done on this Mac. */
+  get cloudSyncMigratedAccount(): string | null {
+    return this.get<string | null>('cloudSyncMigratedAccount', null)
   }
 
-  set vaultRecoveryAcknowledged(value: boolean) {
-    this.set('vaultRecoveryAcknowledged', value)
+  set cloudSyncMigratedAccount(value: string | null) {
+    this.set('cloudSyncMigratedAccount', value ?? undefined)
+  }
+
+  get historySyncEnabled(): boolean {
+    return this.get<boolean>('historySyncEnabled', true)
+  }
+
+  set historySyncEnabled(value: boolean) {
+    this.set('historySyncEnabled', value)
+  }
+
+  get historyRetentionDays(): number | null {
+    return this.get<number | null>('historyRetentionDays', null)
+  }
+
+  set historyRetentionDays(value: number | null) {
+    this.set('historyRetentionDays', value ?? undefined)
+  }
+
+  get lastSyncAt(): number {
+    return this.get<number>('lastSyncAt', 0)
+  }
+
+  set lastSyncAt(value: number) {
+    this.set('lastSyncAt', value)
   }
 
   get keyboardShortcutEnabled(): boolean {
@@ -73,7 +99,21 @@ export class SettingsStore {
   }
 
   clearAccount(): void {
-    for (const key of ['accountId', 'accountEmail', 'accountRole', 'accountState', 'accountPublicMessage', 'accountSupportEmail', 'syncCursor', 'vaultRecoveryAcknowledged']) {
+    // cloudSyncMigratedAccount survives sign-out: that account's vault import is done here.
+    for (const key of [
+      'accountId',
+      'accountEmail',
+      'accountRole',
+      'accountState',
+      'accountPublicMessage',
+      'accountSupportEmail',
+      'syncCursor',
+      'vaultRecoveryAcknowledged',
+      'cloudSyncCursor',
+      'historySyncEnabled',
+      'historyRetentionDays',
+      'lastSyncAt'
+    ]) {
       delete this.data[key]
     }
     this.persist()

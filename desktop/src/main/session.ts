@@ -1,6 +1,7 @@
 import { app, safeStorage } from 'electron'
 import { readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
+import { WorkerError } from './worker'
 
 /**
  * Refresh-token vault sealed with the macOS Keychain via Electron safeStorage.
@@ -66,6 +67,13 @@ export class SessionStore {
     writeFileSync(this.file, safeStorage.encryptString(refreshToken))
   }
 
+  /** Drops an access token the server rejected so the next call refreshes it. */
+  invalidateAccessToken(token: string): void {
+    if (this.currentAccessToken !== token) return
+    this.currentAccessToken = null
+    this.accessExpiresAt = 0
+  }
+
   clear(): void {
     this.currentAccessToken = null
     this.accessExpiresAt = 0
@@ -81,9 +89,19 @@ export class SessionStore {
     const refreshToken = this.peekRefreshToken()
     if (!refreshToken) {
       this.onInvalid()
-      throw new Error('AUTH_REQUIRED: Sign in to use voice dictation.')
+      // A WorkerError, so callers show "sign in" rather than a generic failure.
+      throw new WorkerError('AUTH_REQUIRED', 'Sign in to use voice dictation.', false, 401)
     }
-    const rotated = await this.refreshFn(refreshToken)
+    let rotated: Awaited<ReturnType<typeof this.refreshFn>>
+    try {
+      rotated = await this.refreshFn(refreshToken)
+    } catch (error) {
+      // A revoked, expired, or replayed refresh token never recovers. Keeping it
+      // left the app showing "signed in" while every request failed until the
+      // user happened to sign out; drop it so the dashboard asks to sign in.
+      if (error instanceof WorkerError && error.code === 'AUTH_REQUIRED') this.clear()
+      throw error
+    }
     this.storeTokens(rotated.accessToken, rotated.accessExpiresInSeconds, rotated.refreshToken)
     return rotated.accessToken
   }

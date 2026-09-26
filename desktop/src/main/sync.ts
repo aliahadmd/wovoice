@@ -1,87 +1,90 @@
 import { safeStorage } from 'electron'
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
-import { WorkerError, type WorkerClient } from './worker'
 import {
-  decodeRecoveryKey,
-  decryptRecord,
-  encryptRecord,
-  newSecret,
-  unwrapVaultKey,
-  wrapVaultKey
-} from './vault-crypto'
+  WorkerError,
+  type CloudRecord,
+  type CloudSettings,
+  type CloudWrite,
+  type WorkerClient
+} from './worker'
+import { decryptRecord, unwrapVaultKey } from './vault-crypto'
+import type { DictationRecord, WoVoiceDb } from './db'
 
-const KEY_VERSION = 1
 const SCHEMA_VERSION = 1
 const MAX_BATCH = 100
-
-export interface RemoteSyncItem {
-  id: string
-  type: 'history' | 'dictionary' | 'analytics'
-  version: number
-  keyVersion: number
-  nonce: string | null
-  ciphertext: string | null
-  deleted: boolean
-}
+// Up to 2,000 uploads per sync; anything beyond waits for the next one.
+const MAX_PUSH_ROUNDS = 20
+const MAX_CONFLICT_ROUNDS = 3
+const DAY_MS = 86_400_000
 
 export type SyncOutcome =
-  | { kind: 'ok'; uploaded: number; downloaded: number }
-  | { kind: 'needs-recovery' }
-  | { kind: 'reconciled' }
+  | { kind: 'ok'; uploaded: number; downloaded: number; warning?: string }
   | { kind: 'error'; message: string }
 
+/** Where the sync engine keeps its per-account state (settings.json in the app). */
+export interface SyncState {
+  workerUrl: string
+  getAccountId: () => string | null
+  getCursor: () => number
+  setCursor: (value: number) => void
+  getMigratedAccount: () => string | null
+  setMigratedAccount: (accountId: string) => void
+  getHistorySyncEnabled: () => boolean
+  setHistorySyncEnabled: (value: boolean) => void
+  getRetentionDays: () => number | null
+  setRetentionDays: (value: number | null) => void
+  setLastSyncAt: (value: number) => void
+}
+
+/** Keychain-sealed files left by the old recovery-key vault (injectable for tests). */
+export interface SecretFiles {
+  load(name: string): Buffer | null
+  remove(name: string): void
+}
+
+type SyncWorker = Pick<
+  WorkerClient,
+  | 'pullRecords'
+  | 'pushRecords'
+  | 'updateSyncSettings'
+  | 'completeLegacyMigration'
+  | 'getVault'
+  | 'pullLegacy'
+>
+
+interface Batch {
+  writes: CloudWrite[]
+  tombstones: Set<string>
+}
+
 /**
- * End-to-end encrypted sync, mirroring the phone's SyncCoordinator: a random
- * vault key encrypts each record (AAD-bound to account|type|id|version), the
- * vault key is wrapped with the user's recovery secret and only the wrapped
- * form reaches the server. Deletes push tombstones; conflicts are server-wins.
+ * Cloud sync, mirroring the phone's SyncCoordinator: history and dictionary
+ * follow the signed-in account. Records travel as plain JSON over TLS and the
+ * Worker encrypts them with the account's key, so there is no vault or recovery
+ * key. Conflicts resolve server-wins, except that a delete or an undo made on
+ * this Mac is re-based onto the server version so the user's action still lands.
  */
 export class SyncService {
-  private vaultKey: Buffer | null = null
   private syncing: Promise<SyncOutcome> | null = null
+  private readonly secrets: SecretFiles
 
   constructor(
     private readonly deps: {
-      worker: WorkerClient
-      settings: { workerUrl: string; getAccountId: () => string | null; getCursor: () => number; setCursor: (v: number) => void }
-      db: import('./db').WoVoiceDb
+      worker: SyncWorker
+      settings: SyncState
+      db: WoVoiceDb
       getToken: () => Promise<string>
+      invalidateToken?: (token: string) => void
       vaultDir: string
+      secrets?: SecretFiles
+      now?: () => number
     }
-  ) {}
-
-  get vaultConfigured(): boolean {
-    return this.loadSealed('vault-key.bin') !== null
+  ) {
+    this.secrets = deps.secrets ?? keychainSecretFiles(deps.vaultDir)
   }
 
-  async status(): Promise<{ vaultConfigured: boolean; signedIn: boolean }> {
-    let remoteConfigured = false
-    try {
-      const token = await this.deps.getToken()
-      const vault = await this.deps.worker.getVault(token)
-      remoteConfigured = vault !== null
-    } catch {
-      remoteConfigured = false
-    }
-    return { vaultConfigured: this.vaultConfigured || remoteConfigured, signedIn: true }
-  }
-
-  async importRecoveryKey(key: string): Promise<boolean> {
-    const recoverySecret = decodeRecoveryKey(key)
-    if (recoverySecret === null) return false
-    const token = await this.deps.getToken()
-    const remote = await this.deps.worker.getVault(token)
-    if (remote === null) return false
-    const accountId = this.accountId()
-    const vaultKey = unwrapVaultKey(remote, recoverySecret, accountId)
-    if (vaultKey === null) return false
-    this.seal('vault-key.bin', vaultKey)
-    this.seal('recovery-secret.bin', recoverySecret)
-    this.vaultKey = vaultKey
-    return true
-  }
-
+  /** Single-flight: concurrent callers share the sync already running. */
   async syncNow(): Promise<SyncOutcome> {
     if (this.syncing === null) {
       this.syncing = this.run().finally(() => {
@@ -91,320 +94,424 @@ export class SyncService {
     return this.syncing
   }
 
+  /** Changes the account's history choices; turning history off deletes its cloud copy. */
+  async updateSettings(changes: {
+    historySyncEnabled?: boolean
+    historyRetentionDays?: number | null
+  }): Promise<CloudSettings> {
+    while (this.syncing !== null) await this.syncing
+    const settings = await this.call((token) => this.deps.worker.updateSyncSettings(token, changes))
+    this.applySettings(settings)
+    return settings
+  }
+
+  private now(): number {
+    return this.deps.now?.() ?? Date.now()
+  }
+
   private accountId(): string {
     const id = this.deps.settings.getAccountId()
     if (id === null) throw new WorkerError('AUTH_REQUIRED', 'Sign in first.', false, 401)
     return id
   }
 
-  private async ensureVault(): Promise<'ready' | 'needs-recovery'> {
+  /** Runs a Worker call; a token the server rejects as expired is refreshed once. */
+  private async call<T>(request: (token: string) => Promise<T>): Promise<T> {
     const token = await this.deps.getToken()
-    const accountId = this.accountId()
-    const remote = await this.deps.worker.getVault(token)
-    const localKey = this.loadSealed('vault-key.bin')
-    const localRecovery = this.loadSealed('recovery-secret.bin')
-    if (remote !== null && localKey !== null) {
-      // Prove the stored key really is this account's vault key; a stale key
-      // left over from another account (sign-out clears the files, but never
-      // trust local state) must surface as needs-recovery, not silently
-      // decrypt nothing while pushing records no device can read.
-      const unwrapped =
-        localRecovery !== null ? unwrapVaultKey(remote, localRecovery, accountId) : null
-      if (unwrapped === null || !unwrapped.equals(localKey)) return 'needs-recovery'
-      this.vaultKey = localKey
-      return 'ready'
+    try {
+      return await request(token)
+    } catch (error) {
+      if (!(error instanceof WorkerError) || error.code !== 'TOKEN_EXPIRED') throw error
+      this.deps.invalidateToken?.(token)
+      return request(await this.deps.getToken())
     }
-    if (remote !== null) return 'needs-recovery'
-
-    // No remote vault: any locally stored key belongs to a previous account
-    // whose vault no longer exists server-side, so always mint fresh secrets.
-    const vaultKey = newSecret()
-    const recoverySecret = newSecret()
-    const wrapped = wrapVaultKey(vaultKey, recoverySecret, accountId, KEY_VERSION)
-    await this.deps.worker.putVault(token, wrapped, null)
-    this.seal('vault-key.bin', vaultKey)
-    this.seal('recovery-secret.bin', recoverySecret)
-    this.vaultKey = vaultKey
-    return 'ready'
   }
 
   private async run(): Promise<SyncOutcome> {
     try {
-      const vaultState = await this.ensureVault()
-      if (vaultState !== 'ready') return { kind: 'needs-recovery' }
-      const token = await this.deps.getToken()
       const accountId = this.accountId()
-      const vaultKey = this.vaultKey
-      if (vaultKey === null) return { kind: 'needs-recovery' }
-
-      let downloaded = 0
-      let cursor = this.deps.settings.getCursor()
-      for (;;) {
-        const page = await this.deps.worker.pull(token, cursor)
-        for (const item of page.items) {
-          if (this.applyRemote(accountId, vaultKey, item)) downloaded++
-        }
-        cursor = page.nextCursor
-        this.deps.settings.setCursor(cursor)
-        if (!page.hasMore) break
+      if (this.deps.settings.getMigratedAccount() !== accountId) {
+        await this.importLegacyVault(accountId)
       }
-
-      const uploaded = await this.pushLocal(token, accountId, vaultKey)
-      return { kind: 'ok', uploaded, downloaded }
+      const downloaded = await this.pull()
+      const outcome = await this.push()
+      this.deps.settings.setLastSyncAt(this.now())
+      return outcome.warning === undefined
+        ? { kind: 'ok', uploaded: outcome.uploaded, downloaded }
+        : { kind: 'ok', uploaded: outcome.uploaded, downloaded, warning: outcome.warning }
     } catch (error) {
-      if (error instanceof WorkerError && error.code === 'SYNC_CONFLICT') {
-        // The push path already reconciled server-wins; a second pass converges.
-        return { kind: 'reconciled' }
+      return { kind: 'error', message: error instanceof Error ? error.message : 'Sync failed' }
+    }
+  }
+
+  // ---- Downloads ----
+
+  private async pull(): Promise<number> {
+    let downloaded = 0
+    for (;;) {
+      const cursor = this.deps.settings.getCursor()
+      const page = await this.call((token) => this.deps.worker.pullRecords(token, cursor))
+      // Settings arrive before any upload, so a history-off choice made on
+      // another device is honoured before this Mac sends history.
+      if (page.settings) this.applySettings(page.settings)
+      for (const record of page.items) {
+        // One record that cannot be applied must not stall the feed.
+        try {
+          if (this.applyRecord(record)) downloaded++
+        } catch (error) {
+          console.error('[sync] skipped record', record.type, record.id, error)
+        }
       }
-      return {
-        kind: 'error',
-        message: error instanceof Error ? error.message : 'Sync failed'
+      this.deps.settings.setCursor(page.nextCursor)
+      if (!page.hasMore) return downloaded
+    }
+  }
+
+  private applyRecord(record: CloudRecord): boolean {
+    if (record.type === 'analytics') return false // analytics stay on the phone
+    const db = this.deps.db
+    // A delete made here and not yet uploaded outranks incoming content.
+    if (!record.deleted && db.hasPendingTombstone(record.type, record.id)) return false
+    // This Mac's own writes echo back on the next pull: the version it already
+    // holds is not news. A lower remote version is (the account was reset).
+    const known = db.knownSyncVersion(record.type, record.id)
+    if (known !== null && known === record.version) return false
+    if (record.deleted) {
+      if (known === null) return false
+      db.applyTombstone(record.type, record.id)
+      return true
+    }
+    if (record.payload === null) return false
+    if (record.type === 'history') {
+      if (!this.deps.settings.getHistorySyncEnabled()) return false
+      db.upsertRemoteHistory(historyFromJson(record.id, record.payload), record.version)
+    } else {
+      db.upsertRemoteDictionary(dictionaryFromJson(record.payload), record.id, record.version)
+    }
+    return true
+  }
+
+  // ---- Uploads ----
+
+  private async push(): Promise<{ uploaded: number; warning?: string }> {
+    let uploaded = 0
+    let conflictRounds = 0
+    let skipNewTerms = false
+    let warning: string | undefined
+    for (let round = 0; round < MAX_PUSH_ROUNDS; round++) {
+      const batch = this.stageBatch(skipNewTerms)
+      if (batch.writes.length === 0) break
+      try {
+        const result = await this.call((token) => this.deps.worker.pushRecords(token, batch.writes))
+        for (const applied of result.applied) this.settle(batch, applied)
+        uploaded += result.applied.length
+      } catch (error) {
+        if (!(error instanceof WorkerError)) throw error
+        if (error.code === 'SYNC_CONFLICT' && error.conflicts.length > 0) {
+          if (++conflictRounds > MAX_CONFLICT_ROUNDS) {
+            throw new Error('Changes from another device were merged. Sync again to finish.')
+          }
+          for (const conflict of error.conflicts) this.reconcile(conflict, batch)
+        } else if (error.code === 'STORAGE_LIMIT_REACHED') {
+          // The dictionary is full: keep syncing everything else.
+          skipNewTerms = true
+          warning = error.message
+        } else if (error.code === 'HISTORY_SYNC_DISABLED') {
+          this.applyHistorySyncDisabled()
+        } else {
+          throw error
+        }
       }
     }
+    return { uploaded, warning }
   }
 
-  private applyRemote(accountId: string, vaultKey: Buffer, item: RemoteSyncItem): boolean {
-    if (item.deleted) {
-      this.deps.db.applyTombstone(item.type, item.id)
-      return true
-    }
-    if (item.keyVersion !== KEY_VERSION || item.nonce === null || item.ciphertext === null) return false
-    const plaintext = this.decryptJson(vaultKey, item, accountId)
-    if (plaintext === null) return false
-    if (item.type === 'history') {
-      this.deps.db.upsertRemoteHistory(
-        {
-          requestId: item.id,
-          finalText: String(plaintext.text),
-          createdAtMs: Number(plaintext.createdAtMs),
-          zoneId: String(plaintext.zoneId),
-          wordCount: Number(plaintext.wordCount),
-          audioDurationMs: Number(plaintext.audioDurationMs),
-          asrModel: String(plaintext.asrModel ?? ''),
-          polished: Boolean(plaintext.polished),
-          asrMs: Number(plaintext.asrMs ?? 0),
-          polishMs: Number(plaintext.polishMs ?? 0),
-          totalMs: Number(plaintext.totalMs ?? 0)
-        },
-        item.version
-      )
-      return true
-    }
-    if (item.type === 'dictionary') {
-      this.deps.db.upsertRemoteDictionary(
-        {
-          term: String(plaintext.term),
-          normalizedTerm: String(plaintext.normalizedTerm),
-          status: String(plaintext.status ?? 'confirmed'),
-          source: String(plaintext.source ?? 'manual'),
-          createdAtMs: Number(plaintext.createdAtMs),
-          lastUsedAtMs: Number(plaintext.lastUsedAtMs),
-          useCount: Number(plaintext.useCount ?? 0)
-        },
-        item.id,
-        item.version
-      )
-      return true
-    }
-    return false // analytics stay phone-side in this desktop version
-  }
-
-  private decryptJson(
-    vaultKey: Buffer,
-    item: RemoteSyncItem,
-    accountId: string
-  ): Record<string, unknown> | null {
-    const plaintext = decryptRecord(
-      vaultKey,
-      { nonce: item.nonce ?? '', ciphertext: item.ciphertext ?? '' },
-      accountId,
-      item.type,
-      item.id,
-      item.keyVersion,
-      SCHEMA_VERSION
-    )
-    if (plaintext === null) return null
-    try {
-      return JSON.parse(plaintext.toString('utf-8')) as Record<string, unknown>
-    } catch {
-      return null
-    }
-  }
-
-  private async pushLocal(token: string, accountId: string, vaultKey: Buffer): Promise<number> {
-    const items: Array<{
-      id: string
-      type: 'history' | 'dictionary'
-      baseVersion: number
-      keyVersion: number
-      nonce: string
-      ciphertext: string
-      deleted: boolean
-    }> = []
-
-    for (const tombstone of this.deps.db.tombstones()) {
-      items.push({
-        id: tombstone.recordId,
-        type: tombstone.recordType as 'history' | 'dictionary',
-        baseVersion: tombstone.baseVersion,
-        keyVersion: KEY_VERSION,
-        nonce: '',
-        ciphertext: '',
-        deleted: true
-      })
+  private stageBatch(skipNewTerms: boolean): Batch {
+    const db = this.deps.db
+    const historyOn = this.deps.settings.getHistorySyncEnabled()
+    const writes: CloudWrite[] = []
+    const keys = new Set<string>()
+    const tombstones = new Set<string>()
+    const add = (write: CloudWrite): void => {
+      // The server refuses a batch that names the same record twice.
+      const key = `${write.type}:${write.id}`
+      if (keys.has(key) || writes.length >= MAX_BATCH) return
+      keys.add(key)
+      writes.push(write)
+      if (write.payload === null) tombstones.add(key)
     }
 
-    for (const record of this.deps.db.historyNeedingSync()) {
-      const offsetSeconds = -new Date().getTimezoneOffset() * 60
-      const sealed = encryptRecord(
-        vaultKey,
-        Buffer.from(
-          JSON.stringify({
-            schemaVersion: SCHEMA_VERSION,
-            text: record.finalText,
-            createdAtMs: record.createdAtMs,
-            zoneId: record.zoneId,
-            offsetSeconds,
-            wordCount: record.wordCount,
-            audioDurationMs: record.audioDurationMs,
-            asrModel: record.asrModel,
-            polished: record.polished,
-            asrMs: record.asrMs,
-            polishMs: record.polishMs,
-            totalMs: record.totalMs
-          })
-        ),
-        accountId,
-        'history',
-        record.requestId,
-        KEY_VERSION,
-        SCHEMA_VERSION
-      )
-      items.push({
-        id: record.requestId,
-        type: 'history',
-        baseVersion: 0,
-        keyVersion: KEY_VERSION,
-        nonce: sealed.nonce,
-        ciphertext: sealed.ciphertext,
-        deleted: false
-      })
+    for (const tombstone of db.tombstones()) {
+      const type = tombstone.recordType as 'history' | 'dictionary'
+      if (type === 'history' && !historyOn) {
+        // The account keeps no history in the cloud; there is nothing to delete.
+        db.clearTombstone(type, tombstone.recordId)
+        continue
+      }
+      add({ id: tombstone.recordId, type, baseVersion: tombstone.baseVersion, payload: null })
     }
-
-    for (const entry of this.deps.db.dictionaryNeedingSync()) {
-      const sealed = encryptRecord(
-        vaultKey,
-        Buffer.from(
-          JSON.stringify({
-            schemaVersion: SCHEMA_VERSION,
-            term: entry.term,
-            normalizedTerm: entry.normalizedTerm,
-            status: entry.status,
-            source: entry.source,
-            createdAtMs: entry.createdAtMs,
-            lastUsedAtMs: entry.lastUsedAtMs,
-            useCount: entry.useCount
-          })
-        ),
-        accountId,
-        'dictionary',
-        entry.syncId,
-        KEY_VERSION,
-        SCHEMA_VERSION
-      )
-      items.push({
+    if (historyOn) {
+      for (const record of db.historyNeedingSync()) {
+        // baseVersion: 0 for a new dictation; the server version after an undo.
+        add({ id: record.requestId, type: 'history', baseVersion: record.syncVersion, payload: historyJson(record) })
+      }
+    }
+    for (const entry of db.dictionaryNeedingSync()) {
+      if (skipNewTerms && entry.syncVersion === 0) continue
+      add({
         id: entry.syncId,
         type: 'dictionary',
-        baseVersion: 0,
-        keyVersion: KEY_VERSION,
-        nonce: sealed.nonce,
-        ciphertext: sealed.ciphertext,
-        deleted: false
+        baseVersion: entry.syncVersion,
+        payload: {
+          schemaVersion: SCHEMA_VERSION,
+          term: entry.term,
+          normalizedTerm: entry.normalizedTerm,
+          status: entry.status,
+          source: entry.source,
+          createdAtMs: entry.createdAtMs,
+          lastUsedAtMs: entry.lastUsedAtMs,
+          useCount: entry.useCount
+        }
       })
     }
+    return { writes, tombstones }
+  }
 
-    if (items.length === 0) return 0
+  private settle(batch: Batch, applied: { id: string; type: string; version: number }): void {
+    const db = this.deps.db
+    const type = applied.type === 'dictionary' ? 'dictionary' : 'history'
+    if (!batch.tombstones.has(`${type}:${applied.id}`)) {
+      if (type === 'history') db.markHistorySynced(applied.id, applied.version)
+      else db.markDictionarySynced(applied.id, applied.version)
+      return
+    }
+    db.clearTombstone(type, applied.id)
+    if (type !== 'history') return
+    // The deletion landed. A row still marked deleted leaves the list; a row
+    // restored (undo) while the upload was in flight is re-queued on top of it.
+    const deleted = db.isHistoryDeleted(applied.id)
+    if (deleted === true) db.hardDeleteHistory(applied.id)
+    else if (deleted === false) db.rebaseHistory(applied.id, applied.version)
+  }
 
-    try {
-      const result = await this.deps.worker.push(token, items.slice(0, MAX_BATCH))
-      for (const applied of result.applied) {
-        if (applied.type === 'history') this.deps.db.markHistorySynced(applied.id, applied.version)
-        else if (applied.type === 'dictionary') this.deps.db.markDictionarySynced(applied.id, applied.version)
-        this.deps.db.clearTombstone(applied.type, applied.id)
+  /** Resolves one refused write against the server's current copy of the record. */
+  private reconcile(remote: CloudRecord, batch: Batch): void {
+    if (remote.type === 'analytics') return
+    const db = this.deps.db
+    const type = remote.type
+    const remoteExists = remote.version > 0
+    if (batch.tombstones.has(`${type}:${remote.id}`)) {
+      if (remoteExists && !remote.deleted) {
+        // The user deleted it here: re-base the deletion so it still lands.
+        db.queueTombstone(type, remote.id, remote.version)
+        return
       }
-      // Tombstoned history rows leave the local list once their tombstone
-      // has landed and the local row is confirmed gone.
-      for (const item of items) {
-        if (!item.deleted || item.type !== 'history') continue
-        if (this.deps.db.historyByRequestId(item.id) === null) continue
-        const stillPending = this.deps.db
-          .tombstones()
-          .some((t) => t.recordType === 'history' && t.recordId === item.id)
-        if (!stillPending) this.deps.db.hardDeleteHistory(item.id)
-      }
-      return result.applied.length
-    } catch (error) {
-      if (error instanceof WorkerError && error.code === 'SYNC_CONFLICT' && error.conflicts.length > 0) {
-        for (const conflict of error.conflicts) {
-          if (conflict.deleted) {
-            this.deps.db.applyTombstone(conflict.type, conflict.id)
-          } else if (conflict.nonce !== null && conflict.ciphertext !== null) {
-            const plaintext = this.decryptJson(vaultKey, conflict, accountId)
-            if (plaintext !== null && conflict.type === 'history') {
-              this.deps.db.upsertRemoteHistory(
-                {
-                  requestId: conflict.id,
-                  finalText: String(plaintext.text),
-                  createdAtMs: Number(plaintext.createdAtMs),
-                  zoneId: String(plaintext.zoneId),
-                  wordCount: Number(plaintext.wordCount),
-                  audioDurationMs: Number(plaintext.audioDurationMs),
-                  asrModel: String(plaintext.asrModel ?? ''),
-                  polished: Boolean(plaintext.polished),
-                  asrMs: Number(plaintext.asrMs ?? 0),
-                  polishMs: Number(plaintext.polishMs ?? 0),
-                  totalMs: Number(plaintext.totalMs ?? 0)
-                },
-                conflict.version
-              )
-            } else if (plaintext !== null && conflict.type === 'dictionary') {
-              this.deps.db.upsertRemoteDictionary(
-                {
-                  term: String(plaintext.term),
-                  normalizedTerm: String(plaintext.normalizedTerm),
-                  status: String(plaintext.status ?? 'confirmed'),
-                  source: String(plaintext.source ?? 'manual'),
-                  createdAtMs: Number(plaintext.createdAtMs),
-                  lastUsedAtMs: Number(plaintext.lastUsedAtMs),
-                  useCount: Number(plaintext.useCount ?? 0)
-                },
-                conflict.id,
-                conflict.version
-              )
+      db.clearTombstone(type, remote.id)
+      if (type === 'history') db.hardDeleteHistory(remote.id)
+      return
+    }
+    if (!remoteExists) {
+      // The server has no copy: upload again as a new record.
+      if (type === 'history') db.rebaseHistory(remote.id, 0)
+      else db.rebaseDictionary(remote.id, 0)
+      return
+    }
+    if (remote.deleted) {
+      // A local write against a server deletion is an undo made here: keep it.
+      if (type === 'history') db.rebaseHistory(remote.id, remote.version)
+      else db.applyTombstone(type, remote.id)
+      return
+    }
+    if (remote.payload === null) return
+    if (type === 'history') {
+      db.upsertRemoteHistory(historyFromJson(remote.id, remote.payload), remote.version)
+    } else {
+      db.upsertRemoteDictionary(dictionaryFromJson(remote.payload), remote.id, remote.version)
+    }
+  }
+
+  // ---- Settings ----
+
+  private applySettings(settings: CloudSettings): void {
+    const state = this.deps.settings
+    if (state.getHistorySyncEnabled() && !settings.historySyncEnabled) this.applyHistorySyncDisabled()
+    state.setHistorySyncEnabled(settings.historySyncEnabled)
+    state.setRetentionDays(settings.historyRetentionDays)
+    // The server deletes expired cloud history itself; this covers copies that
+    // were never uploaded (or when history sync is off).
+    if (settings.historyRetentionDays !== null) {
+      this.deps.db.deleteHistoryBefore(this.now() - settings.historyRetentionDays * DAY_MS)
+    }
+  }
+
+  private applyHistorySyncDisabled(): void {
+    this.deps.settings.setHistorySyncEnabled(false)
+    // The cloud copy is gone; mark local history unsynced so turning the setting
+    // back on uploads it again.
+    this.deps.db.markHistoryUnsynced()
+  }
+
+  // ---- One-time import of the old recovery-key vault ----
+
+  /**
+   * Moves this Mac onto cloud sync once per account. When it still holds the old
+   * vault key, the vault's records are merged into local data first (the only
+   * copy of records from devices that are gone), the server is told so it can
+   * retire the vault, and the key files are deleted. Every local record is then
+   * uploaded fresh, since the cloud starts empty.
+   */
+  private async importLegacyVault(accountId: string): Promise<void> {
+    const vaultKey = this.secrets.load('vault-key.bin')
+    const recovery = this.secrets.load('recovery-secret.bin')
+    let imported = false
+    if (vaultKey !== null && recovery !== null) {
+      try {
+        const remote = await this.call((token) => this.deps.worker.getVault(token))
+        const unwrapped = remote === null ? null : unwrapVaultKey(remote, recovery, accountId)
+        if (unwrapped !== null && unwrapped.equals(vaultKey)) {
+          let cursor = 0
+          for (;;) {
+            const from = cursor
+            const page = await this.call((token) => this.deps.worker.pullLegacy(token, from))
+            for (const record of page.items) {
+              try {
+                this.importLegacyRecord(accountId, vaultKey, record)
+              } catch (error) {
+                console.error('[sync] skipped vault record', record.type, record.id, error)
+              }
             }
+            cursor = page.nextCursor
+            if (!page.hasMore) break
           }
-          this.deps.db.clearTombstone(conflict.type, conflict.id)
+          imported = true
         }
-        throw error // surfaced as 'reconciled' by run()
+      } catch (error) {
+        // Another device already moved this account and the vault is closed.
+        if (!(error instanceof WorkerError) || error.code !== 'UPGRADE_REQUIRED') throw error
       }
-      throw error
     }
+    if (imported) await this.call((token) => this.deps.worker.completeLegacyMigration(token))
+    this.deps.db.resetSyncState()
+    this.deps.settings.setCursor(0)
+    this.secrets.remove('vault-key.bin')
+    this.secrets.remove('recovery-secret.bin')
+    this.deps.settings.setMigratedAccount(accountId)
   }
 
-  private seal(name: string, secret: Buffer): void {
-    if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error('Keychain encryption is unavailable; refusing to store vault material in plaintext.')
+  private importLegacyRecord(
+    accountId: string,
+    vaultKey: Buffer,
+    record: {
+      id: string
+      type: string
+      keyVersion: number
+      nonce: string | null
+      ciphertext: string | null
+      deleted: boolean
     }
-    writeFileSync(join(this.deps.vaultDir, name), safeStorage.encryptString(secret.toString('base64')))
+  ): void {
+    const db = this.deps.db
+    if (record.type !== 'history' && record.type !== 'dictionary') return
+    if (record.deleted) {
+      db.applyTombstone(record.type, record.id)
+      return
+    }
+    if (record.nonce === null || record.ciphertext === null) return
+    const plaintext = decryptRecord(
+      vaultKey,
+      { nonce: record.nonce, ciphertext: record.ciphertext },
+      accountId,
+      record.type,
+      record.id,
+      record.keyVersion,
+      SCHEMA_VERSION
+    )
+    if (plaintext === null) return
+    const json = JSON.parse(plaintext.toString('utf-8')) as Record<string, unknown>
+    // Local copies win: they are at least as new as anything in the vault.
+    if (record.type === 'history') {
+      if (db.historyByRequestId(record.id) === null) {
+        db.upsertRemoteHistory(historyFromJson(record.id, json), 0)
+      }
+    } else if (db.dictionaryBySyncId(record.id) === null) {
+      db.upsertRemoteDictionary(dictionaryFromJson(json), record.id, 0)
+    }
   }
+}
 
-  private loadSealed(name: string): Buffer | null {
-    try {
-      const sealed = readFileSync(join(this.deps.vaultDir, name))
-      if (sealed.length === 0 || !safeStorage.isEncryptionAvailable()) return null
-      return Buffer.from(safeStorage.decryptString(sealed), 'base64')
-    } catch {
-      return null
+function historyJson(record: DictationRecord): Record<string, unknown> {
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    text: record.finalText,
+    createdAtMs: record.createdAtMs,
+    zoneId: record.zoneId,
+    offsetSeconds: -new Date(record.createdAtMs).getTimezoneOffset() * 60,
+    wordCount: record.wordCount,
+    audioDurationMs: record.audioDurationMs,
+    asrModel: record.asrModel,
+    polished: record.polished,
+    asrMs: record.asrMs,
+    polishMs: record.polishMs,
+    totalMs: record.totalMs
+  }
+}
+
+function historyFromJson(
+  requestId: string,
+  plaintext: Record<string, unknown>
+): Omit<DictationRecord, 'deleted'> {
+  return {
+    requestId,
+    finalText: String(plaintext.text),
+    createdAtMs: Number(plaintext.createdAtMs),
+    zoneId: String(plaintext.zoneId ?? 'UTC'),
+    wordCount: Number(plaintext.wordCount ?? 0),
+    audioDurationMs: Number(plaintext.audioDurationMs ?? 0),
+    asrModel: String(plaintext.asrModel ?? ''),
+    polished: Boolean(plaintext.polished),
+    asrMs: Number(plaintext.asrMs ?? 0),
+    polishMs: Number(plaintext.polishMs ?? 0),
+    totalMs: Number(plaintext.totalMs ?? 0)
+  }
+}
+
+function dictionaryFromJson(plaintext: Record<string, unknown>): {
+  term: string
+  normalizedTerm: string
+  status: string
+  source: string
+  createdAtMs: number
+  lastUsedAtMs: number
+  useCount: number
+} {
+  return {
+    term: String(plaintext.term),
+    normalizedTerm: String(plaintext.normalizedTerm),
+    status: String(plaintext.status ?? 'confirmed'),
+    source: String(plaintext.source ?? 'manual'),
+    createdAtMs: Number(plaintext.createdAtMs ?? 0),
+    lastUsedAtMs: Number(plaintext.lastUsedAtMs ?? 0),
+    useCount: Number(plaintext.useCount ?? 0)
+  }
+}
+
+function keychainSecretFiles(dir: string): SecretFiles {
+  return {
+    load(name): Buffer | null {
+      try {
+        const sealed = readFileSync(join(dir, name))
+        if (sealed.length === 0 || !safeStorage.isEncryptionAvailable()) return null
+        return Buffer.from(safeStorage.decryptString(sealed), 'base64')
+      } catch {
+        return null
+      }
+    },
+    remove(name): void {
+      try {
+        unlinkSync(join(dir, name))
+      } catch {
+        // absent — nothing to remove
+      }
     }
   }
 }

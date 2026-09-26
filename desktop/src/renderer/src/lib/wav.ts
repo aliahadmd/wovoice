@@ -32,9 +32,11 @@ export function encodeWav(samples: Float32Array, sourceRate: number): ArrayBuffe
 }
 
 /**
- * Linear-interpolation resampler. Works for any source rate — the previous
- * integer floor-decimation silently pitch-shifted audio from devices whose
- * rate isn't a multiple of 16 kHz (e.g. 44.1 kHz USB mics).
+ * Resampler for any source rate — the previous integer floor-decimation silently
+ * pitch-shifted audio from devices whose rate isn't a multiple of 16 kHz (e.g.
+ * 44.1 kHz USB mics). Downsampling averages each output sample's source window
+ * (a box low-pass): point-sampling 48 kHz down to 16 kHz folded everything above
+ * 8 kHz — sibilants and fricatives — back into the speech band as aliasing.
  */
 export function resample(
   samples: Float32Array,
@@ -45,6 +47,16 @@ export function resample(
   const step = sourceRate / targetRate
   const outLength = Math.max(1, Math.round(samples.length / step))
   const out = new Float32Array(outLength)
+  if (step > 1) {
+    for (let i = 0; i < outLength; i++) {
+      const start = Math.min(samples.length - 1, Math.floor(i * step))
+      const end = Math.min(samples.length, Math.max(start + 1, Math.floor((i + 1) * step)))
+      let sum = 0
+      for (let j = start; j < end; j++) sum += samples[j]
+      out[i] = sum / (end - start)
+    }
+    return out
+  }
   for (let i = 0; i < outLength; i++) {
     const pos = i * step
     const i0 = Math.floor(pos)

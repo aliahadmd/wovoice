@@ -84,13 +84,17 @@ function stopTick(): void {
   tickInterval = null
 }
 
-function enterRecording(): void {
+function enterRecording(releaseHint: string): void {
   setState('recording')
   pill.classList.remove('closing')
   pill.classList.add('show')
   pill.dataset.tone = ''
   setLine('Listening…')
-  subLine.innerHTML = 'Release ⌥ to transcribe · <kbd>esc</kbd> cancels'
+  // The hint used to say "⌥" whatever trigger key was chosen.
+  subLine.textContent = `${releaseHint} to transcribe · `
+  const esc = document.createElement('kbd')
+  esc.textContent = 'esc'
+  subLine.append(esc, ' cancels')
   timerEl.textContent = '0:00'
   startTick()
   for (const bar of bars) bar.style.height = '5px'
@@ -149,7 +153,12 @@ async function begin(): Promise<void> {
   processor.connect(mute)
   mute.connect(audioContext.destination)
 
-  autoStop = setTimeout(() => finish(), MAX_DURATION_MS)
+  // Ask main to end the session: finishing here alone left main in its
+  // "recording" state, so it discarded the WAV and the dictation was lost.
+  autoStop = setTimeout(() => {
+    autoStop = null
+    window.api.overlay.autoStop()
+  }, MAX_DURATION_MS)
 }
 
 let barPhase = 0
@@ -188,11 +197,14 @@ function setSuccess(text: string, polished: boolean): void {
   setState('success')
   pill.dataset.tone = 'success'
   setLine(text)
-  setSub(
-    polished
-      ? 'Inserted at your cursor · <span class="chip">✨ polished</span>'
-      : 'Inserted at your cursor'
-  )
+  setSub(polished ? 'Inserted at your cursor · ' : 'Inserted at your cursor')
+  if (polished) {
+    // setSub writes textContent, so the chip markup used to show as literal tags.
+    const chip = document.createElement('span')
+    chip.className = 'chip'
+    chip.textContent = '✨ polished'
+    subLine.appendChild(chip)
+  }
   schedule(() => pill.classList.add('closing'), SUCCESS_EXIT_AT_MS)
 }
 
@@ -253,21 +265,31 @@ function finish(): void {
 
   if (!detection.containsSpeech) {
     console.log('overlay page: speech gate rejected —', JSON.stringify(detection))
-    window.api.overlay.fail('No clear speech detected — try holding ⌥ a little longer')
+    window.api.overlay.fail('No clear speech detected — try speaking a little longer')
     return
   }
 
-  const merged = new Float32Array(captured.reduce((sum, chunk) => sum + chunk.length, 0))
+  // The cap timer starts after the microphone opens and audio arrives in
+  // 4096-sample blocks, so a capped recording can run a little past 60 s —
+  // beyond the Worker's 60.1 s limit. Trim to exactly the cap.
+  const maxSamples = Math.floor((sampleRate * MAX_DURATION_MS) / 1000)
+  const total = Math.min(
+    maxSamples,
+    captured.reduce((sum, chunk) => sum + chunk.length, 0)
+  )
+  const merged = new Float32Array(total)
   let offset = 0
   for (const chunk of captured) {
-    merged.set(chunk, offset)
-    offset += chunk.length
+    if (offset >= total) break
+    const part = chunk.subarray(0, total - offset)
+    merged.set(part, offset)
+    offset += part.length
   }
   const wav = encodeWav(merged, sampleRate)
   console.log('overlay page: sending WAV,', merged.length, 'samples @', sampleRate, 'Hz')
   window.api.overlay.done({
     wav,
-    durationMs: detection.durationMs,
+    durationMs: Math.min(detection.durationMs, MAX_DURATION_MS),
     containsSpeech: detection.containsSpeech
   })
 }
@@ -285,10 +307,10 @@ function teardownAudio(): void {
   settleBars()
 }
 
-window.api.overlay.onBegin(() => {
+window.api.overlay.onBegin((releaseHint) => {
   clearTimers(stateTimers)
   pill.classList.remove('closing')
-  enterRecording()
+  enterRecording(releaseHint)
   void begin()
 })
 window.api.overlay.onEnd(() => finish())
