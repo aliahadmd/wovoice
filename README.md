@@ -6,36 +6,56 @@
 
 <p align="center">
   <strong>Speak naturally. Get clear, ready-to-use text.</strong><br>
-  A private, speech-first Android keyboard for accurate English dictation.
+  Private voice dictation for your Android phone and your Mac.
 </p>
 
 <p align="center">
-  <a href="https://github.com/aliahadmd/wovoice/releases/latest"><strong>Download the latest APK</strong></a>
+  <a href="https://github.com/aliahadmd/wovoice/releases"><strong>Download WoVoice</strong></a>
   ·
   <a href="https://wovoice.aliahad.com/status"><strong>Service status</strong></a>
+  ·
+  <a href="https://wovoice.aliahad.com/privacy"><strong>Privacy</strong></a>
 </p>
 
-WoVoice lets you speak into any normal Android text field instead of typing everything by hand. It listens after one tap, processes the complete thought after a second tap, adds punctuation and light corrections, then inserts the final text exactly where you started.
+WoVoice turns your speech into clean, punctuated text and puts it exactly where you were typing — in a chat, an email, a note, a browser, or any other app.
 
-WoVoice is a free public beta distributed directly through GitHub rather than the Play Store. Its main recognition language is **English (India)**, with special attention to South Asian pronunciation, names, numbers, punctuation, and everyday sentences.
+- **On Android**, WoVoice is a keyboard. Tap the microphone, speak, tap again, and the text appears in the field you were using.
+- **On Mac**, WoVoice runs in the background. Hold the **⌥ Option** key anywhere, speak, let go, and the text is typed at your cursor.
+
+Both use the same free account, so your History and Dictionary follow you from phone to Mac automatically.
+
+WoVoice is tuned for **English (India)**, with special care for South Asian pronunciation, names, numbers, and everyday sentences. It is a free public beta, distributed directly from this page rather than the Play Store or App Store.
 
 <p align="center">
-  <img src="docs/images/wovoice-home.png" width="340" alt="WoVoice Home dashboard">
+  <img src="docs/images/wovoice-home.png" width="300" alt="WoVoice Home screen on Android">
+  &nbsp;&nbsp;
+  <img src="docs/images/mac-home.png" width="520" alt="WoVoice Home screen on Mac">
 </p>
 
 ## Contents
 
-- [What WoVoice offers](#what-wovoice-offers)
+- [What WoVoice does for you](#what-wovoice-does-for-you)
 - [Product video](#product-video)
-- [Download and requirements](#download-and-requirements)
-- [First-time setup](#first-time-setup)
-- [Using voice dictation](#using-voice-dictation)
-- [Voice keyboard controls](#voice-keyboard-controls)
-- [Manual keyboard](#manual-keyboard)
-- [Dashboard guide](#dashboard-guide)
-- [Accuracy tips](#tips-for-the-best-accuracy)
-- [Privacy and local data](#privacy-and-local-data)
+- [Your WoVoice account](#your-wovoice-account)
+- [WoVoice on Android](#wovoice-on-android)
+- [WoVoice on Mac](#wovoice-on-mac)
+- [Sync between your devices](#sync-between-your-devices)
+- [Tips for the best accuracy](#tips-for-the-best-accuracy)
+- [Your privacy](#your-privacy)
+- [What the messages mean](#what-the-messages-mean)
 - [Troubleshooting](#troubleshooting)
+- [Current limits](#current-limits)
+
+## What WoVoice does for you
+
+- **Writes what you meant.** Punctuation, capital letters, and spacing are added for you. You don't need to say "comma" or "full stop".
+- **Cleans up lightly, never rewrites.** Filler words like "um" are removed and obvious grammar slips are fixed. Your names, numbers, and meaning stay exactly as you said them.
+- **Formats numbers.** "Four eight two nine" becomes 4829.
+- **Understands line breaks.** Say **"new line"** or **"new paragraph"** to start one.
+- **Learns your words.** Add names, places, brands, and specialist terms to your Dictionary so they're spelled correctly every time.
+- **Keeps a History** of everything you've dictated, so you can find, copy, or delete it later.
+- **Shows your progress:** how much you've dictated, how many words, and how fast you speak.
+- **Respects your privacy.** No ads, no tracking, and no recording of what you type. Your voice is never saved.
 
 ## Product video
 
@@ -45,412 +65,339 @@ WoVoice is a free public beta distributed directly through GitHub rather than th
   </a>
 </p>
 
-## What WoVoice offers
+## Your WoVoice account
 
-- Accuracy-first English speech recognition with automatic punctuation.
-- Light grammar, capitalization, and spacing cleanup without rewriting your meaning.
-- Smart formatting for common numbers, dates, and ordinary dictation.
-- Spoken **“new line”** and **“new paragraph”** commands.
-- A smooth tap-to-record, tap-to-finish workflow with a live waveform.
-- Automatic insertion into the same field where dictation began.
-- A complete manual QWERTY keyboard with numbers, two symbol pages, and an emoji page.
-- A personal Dictionary for names, places, brands, and specialist terms.
-- Local History with search, copy, details, deletion, and Undo.
-- Private usage analytics such as speaking time, words, WPM, and processing speed.
-- Estimated Workers AI cost and usage, clearly separated from actual billing.
-- No advertising, tracking, typing-history collection, or crash-reporting SDK.
+Voice dictation needs a free WoVoice account. There is no password: you sign in with a six-digit code sent to your email.
 
-## Download and requirements
+1. In the app, tap or click **Sign in or create account**.
+2. A secure WoVoice page opens in your browser. Enter your email address and complete the quick security check.
+3. Open the email from WoVoice and enter the six-digit code.
+4. You're returned to the app, signed in.
 
-Download the current APK from [GitHub Releases](https://github.com/aliahadmd/wovoice/releases/latest). WoVoice supports Android 7.0 and later and is optimized for the Redmi K80 Pro on Android 16.
+Use the same email on your phone and your Mac and they share one History and one Dictionary.
 
-The account, synchronization, and speech service is hosted at [wovoice.aliahad.com](https://wovoice.aliahad.com). Voice input uses a verified WoVoice account; there is no shared device token to copy into the app. The manual keyboard remains available while signed out or offline.
+Every account includes **10 minutes of dictation per day**. The allowance resets at midnight UTC (5:30 AM in India).
 
-## First-time setup
+---
+
+## WoVoice on Android
+
+Works on Android 7.0 and later.
+
+### Install
+
+1. On your phone, open the [Releases page](https://github.com/aliahadmd/wovoice/releases) and download the newest **WoVoice `.apk`** file.
+2. Open the downloaded file. If Android asks, allow your browser to **install unknown apps**, then tap **Install**.
+
+### Set up (about one minute)
 
 Open WoVoice and go to **Settings → Setup**.
 
-1. Tap **Allow** beside Microphone and approve microphone access.
-2. Tap **Enable** beside Keyboard access.
-3. In Android's keyboard settings, turn on **WoVoice**.
-4. Return to the app and tap **Choose**.
-5. Select **WoVoice** as the active keyboard.
-6. Under **Account**, tap **Sign in or create account**.
-7. Enter your email in the secure WoVoice page, complete the security check, and enter the six-digit code.
-8. Return to WoVoice. Your history and Dictionary now sync to your account automatically, with no recovery key to save.
+1. Tap **Allow** next to Microphone and approve microphone access.
+2. Tap **Enable** next to Keyboard access, and turn on **WoVoice** in Android's keyboard list.
+3. Return to the app and tap **Choose**, then select **WoVoice** as your keyboard.
+4. Under **Account**, tap **Sign in or create account** and follow the steps above.
 
-The Home readiness card should show:
+Android shows a standard warning when you turn on any downloaded keyboard. Check that the name says **WoVoice**, then accept.
 
-- **Microphone ready**
-- **WoVoice selected**
-- **Account ready**
-- **Network available**
+When everything is ready, the Home screen shows **Microphone ready**, **WoVoice selected**, **Account ready**, and **Network available**.
 
-Android may show a standard warning when enabling any downloaded keyboard. Confirm that the keyboard name is WoVoice before accepting.
+> Voice typing needs an internet connection and a signed-in account. The regular keyboard always works, even offline.
 
-> Speech-to-text requires an internet connection and a valid WoVoice account. The manual keyboard continues to work without either one.
+### Dictate
 
-## Using voice dictation
-
-### 1. Open WoVoice
-
-Tap a text field in Notes, Messages, a browser, email, or another Android app. If a different keyboard appears, use Android's keyboard picker and choose WoVoice.
-
-The voice-ready screen looks like this:
+**1. Open any text box.** Tap a text field in Messages, WhatsApp, Gmail, Notes, a browser, or any other app. WoVoice appears ready to listen.
 
 <p align="center">
-  <img src="docs/images/keyboard-voice-idle.png" width="680" alt="WoVoice voice keyboard ready to record">
+  <img src="docs/images/keyboard-voice-idle.png" width="620" alt="WoVoice keyboard ready to record">
 </p>
 
-### 2. Start recording
-
-Tap the large white microphone button once. Recording begins immediately, the layout expands, and the center waveform responds to the microphone level.
+**2. Tap the big microphone and speak.** The waveform moves as you talk.
 
 <p align="center">
-  <img src="docs/images/keyboard-recording.png" width="330" alt="WoVoice actively recording speech">
+  <img src="docs/images/keyboard-recording.png" width="300" alt="WoVoice recording your voice">
 </p>
 
-While this screen is visible:
+- Speak normally in full sentences, not one word at a time.
+- Tap the waveform (**"Tap again to finish"**) when you're done.
+- Tap **×** to cancel. Cancelled speech is thrown away.
+- Recording stops on its own after 60 seconds.
 
-- Speak normally rather than one word at a time.
-- Tap the waveform or the **“Tap again to finish”** area when finished.
-- Tap **×** to cancel. Cancelled speech is not inserted or added to History.
-- Recording stops automatically at the 60-second limit.
+**3. Wait a moment.** WoVoice listens to your whole thought first so the punctuation makes sense, then inserts the finished text in one go.
 
-### 3. Let WoVoice process the complete thought
+Stay in the same text box while it's working. If you switch to another box or app, WoVoice deliberately drops the result rather than typing into the wrong place.
 
-After the second tap, WoVoice shows a processing state. The complete recording is recognized first so punctuation and sentence structure can use the full context. There are no unstable partial words placed in the editor.
+Some examples:
 
-Do not change to another text field while processing. If focus changes, the keyboard closes, or another editor becomes active, WoVoice deliberately discards the late result rather than inserting text into the wrong place.
-
-### 4. Receive the final text
-
-WoVoice inserts the final result in one operation. It checks only the adjacent cursor character on the phone to decide whether a leading or trailing space is needed. Surrounding text is not sent with the request.
-
-Examples of natural speech:
-
-| You say | Intended result |
+| You say | You get |
 | --- | --- |
-| “Can we meet tomorrow morning” | Can we meet tomorrow morning? |
-| “My order number is four eight two nine” | My order number is 4829. |
-| “First item new line second item” | First item<br>Second item |
-| “Thank you new paragraph Please send the report” | Thank you.<br><br>Please send the report. |
+| "Can we meet tomorrow morning" | Can we meet tomorrow morning? |
+| "My order number is four eight two nine" | My order number is 4829. |
+| "First item new line second item" | First item<br>Second item |
+| "Thank you new paragraph Please send the report" | Thank you.<br><br>Please send the report. |
 
-Punctuation is normally inferred, so you do not need to say “comma” or “full stop” in ordinary speech.
+### Keyboard buttons
 
-## Voice keyboard controls
-
-| Control | Function |
+| Button | What it does |
 | --- | --- |
-| **Waveform / EN pill** | Switches between voice mode and the manual English keyboard. |
-| **Microphone** | Tap once to record and tap again to finish. |
-| **× while recording** | Cancels the recording without inserting or saving a result. |
-| **Delete icon** | Deletes text immediately before the cursor. |
-| **@ button** | Inserts an at-sign without changing to the symbol keyboard. |
-| **Done / Enter / Next / Search / Send / Go** | Performs the action requested by the current text field. |
-| **Horizontal swipe** | Moves between voice and manual modes without pressing the key under the gesture. |
+| **Waveform / EN switch** | Switches between voice and the regular keyboard. |
+| **Microphone** | Tap to start recording, tap again to finish. |
+| **×** (while recording) | Cancels without typing anything. |
+| **Delete** | Deletes the character before the cursor. |
+| **@** | Types an @ sign. |
+| **Done / Enter / Next / Search / Send / Go** | Does whatever the app expects — sends the message, runs the search, moves to the next field, and so on. |
+| **Swipe left or right** | Another way to switch between voice and the regular keyboard. |
 
-The action key changes automatically. For example, a search box receives **Search**, a message field may receive **Send**, a form may receive **Next**, and a multiline note receives **Enter**.
+**Passwords and PINs are protected.** In password fields WoVoice switches to the regular keyboard and turns the microphone off, so secrets are never spoken or sent anywhere.
 
-### Sensitive fields
+### The regular keyboard
 
-Voice input is disabled for password and PIN fields. WoVoice forces the manual layout so secret values are never recorded for transcription.
-
-Dictionary learning is also avoided in passwords, PINs, email addresses, URLs, fields that disable personalized learning, and other unsuitable editors.
-
-## Manual keyboard
-
-Tap **EN** in the voice/manual pill or swipe horizontally to open the manual keyboard.
-
-### Letters and capitalization
+Tap **EN** or swipe sideways to type by hand. It works offline and has no account requirement.
 
 <table>
   <tr>
-    <td align="center"><img src="docs/images/keyboard-manual.png" width="230" alt="WoVoice manual keyboard with one-shot shift"></td>
-    <td align="center"><img src="docs/images/keyboard-lowercase.png" width="230" alt="WoVoice manual keyboard in lowercase"></td>
-    <td align="center"><img src="docs/images/keyboard-caps-lock.png" width="230" alt="WoVoice manual keyboard with caps lock"></td>
+    <td align="center"><img src="docs/images/keyboard-manual.png" width="230" alt="Capital letter for the next key"></td>
+    <td align="center"><img src="docs/images/keyboard-lowercase.png" width="230" alt="Lowercase letters"></td>
+    <td align="center"><img src="docs/images/keyboard-caps-lock.png" width="230" alt="Caps Lock on"></td>
   </tr>
   <tr>
-    <td align="center"><strong>One-shot Shift</strong></td>
+    <td align="center"><strong>Next letter capital</strong></td>
     <td align="center"><strong>Lowercase</strong></td>
     <td align="center"><strong>Caps Lock</strong></td>
   </tr>
 </table>
 
-- Tap **Shift** once to change the next letter's case.
-- Shift turns off after a one-shot capital is typed.
-- Double-tap **Shift** to enable Caps Lock.
-- Tap Shift again to leave Caps Lock.
-- WoVoice can begin with capitals automatically at the start of a sentence.
-
-### Numbers and symbols
-
-Tap **123** to open numbers and common punctuation.
+- Tap **Shift** once for one capital letter. Double-tap it for Caps Lock, and tap again to turn Caps Lock off.
+- New sentences start with a capital automatically.
+- Hold **Backspace** to keep deleting. Emoji are deleted cleanly as one character.
 
 <table>
   <tr>
-    <td align="center"><img src="docs/images/keyboard-numbers.png" width="340" alt="WoVoice number and common symbol keyboard"></td>
-    <td align="center"><img src="docs/images/keyboard-symbols.png" width="340" alt="WoVoice second symbol keyboard"></td>
+    <td align="center"><img src="docs/images/keyboard-numbers.png" width="340" alt="Numbers and common symbols"></td>
+    <td align="center"><img src="docs/images/keyboard-symbols.png" width="340" alt="More symbols"></td>
   </tr>
   <tr>
     <td align="center"><strong>Numbers and common symbols</strong></td>
-    <td align="center"><strong>Additional symbols</strong></td>
+    <td align="center"><strong>More symbols</strong></td>
   </tr>
 </table>
 
-- Tap **#+=** for brackets, mathematical signs, currencies, and additional punctuation.
-- Tap **123** to return to the first symbol page.
-- Tap **ABC** to return to letters.
-- Tap **🙂** on any page to open the emoji page with category tabs, a scrollable grid, and a Recents tab of recently used emojis.
+- **123** opens numbers and punctuation. **#+=** opens brackets, maths signs, and currencies. **ABC** goes back to letters.
+- **🙂** opens emoji, organised by category, with a **Recents** tab for the ones you use most.
 
-### Manual-key functions
+The regular keyboard is intentionally simple. It doesn't have autocorrect or word suggestions.
 
-| Key | Behavior |
-| --- | --- |
-| **Backspace** | Deletes one complete character; hold it for repeated deletion. Emoji and other Unicode text are handled safely. |
-| **Space / English** | Inserts a normal space and shows the current keyboard language. |
-| **123** | Opens digits and the first symbol page. |
-| **#+=** | Opens the second symbol page. |
-| **🙂** | Opens the emoji page with categories and recently used emojis. |
-| **ABC** | Returns to letters. |
-| **Shift** | One tap changes the next letter; double-tap enables Caps Lock. |
-| **Action key** | Adapts to Done, Enter, Next, Search, Send, or Go. |
+### The WoVoice app
 
-The manual keyboard intentionally stays simple and predictable. It currently has no autocorrect or suggestion strip, so it remains a dependable offline fallback.
+The app has four tabs at the bottom: **Home**, **History**, **Dictionary**, and **Settings**.
 
-## Dashboard guide
+**Home** shows how you're doing for **Today**, **7 days**, **30 days**, or **All time**: number of dictations, time spent speaking, words, speaking pace, how quickly results came back, and your most recent dictations. Only dictations that were actually typed into an app are counted. It also shows a rough estimate of the AI processing cost of your dictations — this is for interest only; WoVoice is free and you are never charged.
 
-WoVoice uses four bottom tabs: **Home**, **History**, **Dictionary**, and **Settings**.
+**History** lists every dictation that was inserted. Search it, copy text, open the details, or delete items (swipe to delete, with **Undo**). Your voice recordings are never kept, and History doesn't record which app you were typing in.
 
-### Home
-
-Home is the private voice workspace. Choose **Today**, **7 days**, **30 days**, or **All time** to view:
-
-- Successful dictations
-- Total dictation time
-- Words dictated
-- Speaking pace in words per minute
-- Median processing time
-- Polished-result percentage
-- Correction rate
-- Recent dictations
-
-Only successful, inserted dictations count. Silent, cancelled, failed, and discarded recordings do not inflate speaking time or WPM.
-
-The **Estimated AI usage** card separates speech recognition from grammar-polish usage and can show today's and the current month's estimates. The amount is a WoVoice estimate based on the Worker's pricing version; it is **not a Cloudflare invoice or account balance**.
-
-### History
-
-A History item is created only after final text is successfully inserted into the intended editor.
-
-Each item can contain:
-
-- Final generated text
-- Original phone-local date and time
-- Word count and audio duration
-- Recognition model and polishing status
-- Processing time
-- Estimated usage
-
-History never stores the audio, raw recognition result, surrounding editor text, or the name of the app where you dictated.
-
-You can:
-
-- Search History locally
-- Copy final text
-- Open details
-- Delete an item
-- Swipe to delete and use **Undo**
-- Clear all History after confirmation
-
-Deleting individual History items does not automatically erase anonymous daily totals. Use **Reset analytics** when you also want those totals removed.
-
-### Dictionary
-
-Dictionary helps recognition of unusual names and specialist vocabulary.
+**Dictionary** helps WoVoice spell unusual words correctly.
 
 <p align="center">
-  <img src="docs/images/wovoice-dictionary.png" width="360" alt="WoVoice Dictionary screen">
+  <img src="docs/images/wovoice-dictionary.png" width="340" alt="WoVoice Dictionary screen">
 </p>
 
-Use **+ Add** to save a term manually. Confirmed entries can be searched, edited, and deleted. WoVoice can keep up to 1,000 entries locally and selects the most useful confirmed terms for each transcription.
+- Tap **+ Add** and type a name or term exactly as it should be spelled. You can keep up to 1,000 terms.
+- If you fix a word right after dictating it, WoVoice may offer it under **Suggestions**. Approve only real names or special terms you want remembered — nothing is added without your approval.
 
-When correction learning is enabled, WoVoice may detect a likely word replacement made immediately after its dictation. It creates a reviewable item under **Suggestions** rather than silently changing the Dictionary.
+**Settings** covers setup, your account and sync, voice options, keyboard feel (vibration, animations, waveform), History and statistics, Dictionary learning, and privacy controls.
 
-Approve only corrections that represent a name or distinctive term you want recognized later. Ordinary grammar edits, large rewrites, URLs, and ambiguous corrections should not become Dictionary entries.
+---
 
-Only approved terms may be included in later transcription requests. The surrounding correction context never leaves the phone.
+## WoVoice on Mac
 
-### Settings
+Hold a key, speak, release — the text appears wherever your cursor is, in any app.
 
-Settings is organized into these areas:
+### Install
 
-- **Setup:** microphone permission, keyboard enablement, active-keyboard picker, and readiness.
-- **Account:** verified email, today’s free quota, cloud sync status and **Sync now**, the **Sync history** and **Auto-delete history** choices, signed-in devices, logout, and account deletion.
-- **Voice & language:** English (India), light polish, punctuation, and spoken line commands.
-- **Keyboard:** haptics, animations, waveform, and manual keyboard preferences.
-- **History & analytics:** local History, cost display, clear History, and reset analytics.
-- **Dictionary & learning:** correction suggestions and Dictionary management.
-- **Privacy & data:** local-storage explanation and clear-all-data action.
-- **About:** app version and Worker/privacy information.
+1. Open the [Releases page](https://github.com/aliahadmd/wovoice/releases), find the newest **WoVoice Desktop** release, and download the `wovoice-desktop-….dmg` file.
+2. Open it and drag **WoVoice** into your **Applications** folder.
+3. Open WoVoice from Applications.
+
+Because WoVoice is downloaded from the web rather than the App Store, macOS may say it can't verify the app the first time. If so, open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to the WoVoice message.
+
+### Give it two permissions
+
+WoVoice asks for exactly two permissions — nothing else. It never reads your screen, files, or browsing.
+
+1. **Microphone** — so it can hear you while you dictate.
+2. **Device Control & Data Access** (called **Accessibility** on older macOS) — so it can notice when you press your dictation key and paste the finished text at your cursor.
+
+Both can be granted from WoVoice's **Settings** tab. The first time WoVoice pastes, macOS also asks whether WoVoice may control **System Events** — click **OK**. This is what lets it type the text for you.
+
+<p align="center">
+  <img src="docs/images/mac-settings.png" width="620" alt="WoVoice Settings on Mac with triggers, permissions, and startup">
+</p>
+
+Then open the **Account** tab and sign in (see [Your WoVoice account](#your-wovoice-account)).
+
+### Dictate
+
+1. Click into any text box — a message, an email, a document, a search bar.
+2. **Hold ⌥ Option** and start speaking. A small bubble appears at the top of your screen with a live waveform and timer.
+3. **Let go** of the key. WoVoice transcribes your speech and types it at your cursor.
+
+<p align="center">
+  <img src="docs/images/mac-recording-bubble.png" width="480" alt="WoVoice recording bubble showing Listening, release Option to transcribe">
+</p>
+
+- **Hands-free:** quickly tap ⌥ Option once to keep recording without holding it. Tap it again to finish.
+- **Mouse:** hold the **middle mouse button** (scroll-wheel click) to dictate, and release to finish.
+- **Cancel:** press **Esc** or click **×** on the bubble.
+- The bubble shows each step — listening, transcribing, done — or tells you exactly what went wrong.
+- Recording stops on its own after 60 seconds, and what you said is still transcribed.
+
+Your clipboard is put back the way it was after each paste, so dictating never overwrites something you copied.
+
+### The WoVoice window
+
+**Home** shows your dictations for today, the last 7 or 30 days, or all time — how many, how long, how many words, and your speaking pace — plus your most recent dictations.
+
+**History** lists everything you've dictated, including dictations from your phone. Search it, **Copy** any item, or **Delete** it (with Undo).
+
+<p align="center">
+  <img src="docs/images/mac-history.png" width="620" alt="WoVoice History on Mac">
+</p>
+
+**Dictionary** lets you add and remove names and special terms. It's the same Dictionary as on your phone.
+
+**Account** shows your email, how much of today's dictation time is left, and when it resets. This is also where you control sync (see below) and sign out.
+
+**Settings** lets you:
+
+- Choose your **hold-to-talk key**: left ⌥ Option (default), right ⌥ Option, left or right ⌘ Command, ⇪ Caps Lock, or the 🌐 fn / Globe key. Only the key you choose starts dictation — normal typing is never affected.
+- Turn the keyboard trigger or middle-click trigger on or off.
+- Check and grant permissions.
+- Start WoVoice automatically when you log in to your Mac.
+
+---
+
+## Sync between your devices
+
+Once you're signed in, your **History** and **Dictionary** sync between your phone and your Mac automatically. There's no recovery key or extra setup — signing in is enough. Your Android phone also syncs your Home statistics between phones.
+
+You control this from **Account** (Mac) or **Settings → Account** (Android):
+
+- **Sync now** — sync immediately instead of waiting.
+- **Sync history** — turn this off to remove your dictated text from your account online. The copies already on your devices stay.
+- **Auto-delete history** — automatically delete dictations older than 30 days, 90 days, or 1 year, on every device.
+- **Signed-in devices** (Android) — see where you're signed in and sign out any device remotely.
+
+Synced data is stored encrypted, with a key unique to your account.
 
 ## Tips for the best accuracy
 
-- Hold or place the phone about 15–30 cm from your mouth.
-- Wait for the recording animation before beginning the sentence.
-- Use complete thoughts of roughly 5–15 seconds when practical.
-- Speak at a natural pace and pause briefly between sentences.
-- Avoid touching or covering the phone's microphone while speaking.
-- Move closer to the phone in mild noise instead of shouting.
-- Add important names, business terms, and uncommon spellings to Dictionary.
-- Review correction Suggestions so useful terms are learned without saving mistakes.
-- Use “new line” and “new paragraph” clearly and deliberately.
-- Check critical names, dates, amounts, and numbers before sending important text.
+- Keep the microphone about 15–30 cm (6–12 inches) from your mouth.
+- Wait until recording has started before you begin speaking.
+- Speak complete thoughts of about 5–15 seconds at a natural pace, with short pauses between sentences.
+- Don't cover the microphone with your finger or a case.
+- In a noisy place, move closer to the microphone instead of speaking louder.
+- Add important names and uncommon spellings to your Dictionary.
+- Say "new line" and "new paragraph" clearly and on purpose.
+- Always double-check important names, dates, amounts, and numbers before sending.
 
-## Privacy and local data
+## Your privacy
 
-WoVoice is designed to collect as little information as possible:
+WoVoice is built to collect as little as possible.
 
-- The active recording is written only to temporary app-private storage.
-- Temporary audio is deleted after success, failure, cancellation, timeout, keyboard dismissal, or cleanup.
-- History, analytics, and Dictionary entries are partitioned by account in the app's private phone storage.
-- Cloud sync stores your history, approved Dictionary entries, and analytics in your account, encrypted by the WoVoice service with a key unique to your account. The service can decrypt them to deliver them to your devices; the admin console never shows their contents.
-- Turn off **Sync history** to delete your dictated text from your account (local copies stay), or choose **Auto-delete history** to remove dictations older than 30 days, 90 days, or a year everywhere.
-- The rotating refresh token is encrypted with Android Keystore-backed AES-GCM.
-- Phone backups are disabled for WoVoice data.
-- Surrounding text, clipboard contents, contacts, typing history, and source-app identity are not sent.
-- Correction context stays on the phone; only approved Dictionary terms can be used as glossary hints.
-- There are no advertising, analytics, or crash-reporting SDKs.
+- **Your voice is never stored.** Recordings are used only to produce your text and are deleted straight away — after success, failure, or cancellation.
+- **Only what you dictate is processed.** The text around your cursor, your clipboard, your contacts, what you type by hand, and the name of the app you're using are never sent.
+- **Passwords are safe.** Voice is turned off in password and PIN fields on Android.
+- **Your Dictionary stays yours.** Only terms you've approved are used to improve recognition.
+- **Your synced data is encrypted** with a key unique to your account. WoVoice's support staff never see the contents of your History or Dictionary.
+- **No ads, no tracking, no crash-reporting tools.**
+- Phone backups of WoVoice data are turned off, and your sign-in is protected by your device's secure storage (Android Keystore or the Mac Keychain).
 
-Three different cleanup actions are available because they affect different information:
+You stay in control of your data:
 
 | Action | What it removes |
 | --- | --- |
-| **Clear history** | Individual final-text records. |
-| **Reset analytics** | Anonymous daily usage totals and calculated insights. |
-| **Clear all data** | History, analytics, Dictionary data, and other local WoVoice information. |
+| **Clear history** | Your saved dictations. |
+| **Reset analytics** | Your Home statistics. |
+| **Clear all data** | Everything WoVoice stores on this phone. |
+| **Delete account** | Your account, every synced item, and all your sign-ins. This needs a fresh email code. |
 
-Account deletion requires a fresh email code and removes sessions, every synced record, and identifiable service usage. See [Delete your account](https://wovoice.aliahad.com/delete-account).
+Read the full [Privacy Policy](https://wovoice.aliahad.com/privacy) or learn how to [delete your account](https://wovoice.aliahad.com/delete-account).
 
-## Understanding messages and states
+## What the messages mean
 
-| Message or state | Meaning |
+| Message | Meaning |
 | --- | --- |
-| **Tap to speak** | WoVoice is ready. |
-| **Tap again to finish** | Recording is active. |
-| **Thinking / Processing** | Audio is being recognized and lightly polished. |
-| **No clear speech** | The recording was silent or too quiet to use. It is discarded locally. |
-| **Connection failed** | The WoVoice service could not be reached. |
-| **Sign in to use voice** | The account session is missing or expired; the manual keyboard still works. |
-| **Daily limit reached** | The account has used its free 10 minutes for the current UTC day. |
-| **Try again** | No text was inserted; return to the same field and record again. |
+| **Tap to speak** / **Listening…** | WoVoice is ready, or is recording. |
+| **Tap again to finish** | Recording is in progress on your phone. |
+| **Thinking** / **Transcribing** | Your speech is being turned into text. |
+| **No clear speech** | The recording was silent or too quiet. Nothing was sent. |
+| **Connection failed** | WoVoice couldn't reach its service. Check your internet. |
+| **Sign in to use voice** | You're signed out or your sign-in expired. The regular keyboard still works. |
+| **Daily limit reached** | You've used today's 10 free minutes. It resets at midnight UTC. |
+| **Try again** | Nothing was typed. Go back to the same text box and record again. |
 
 ## Troubleshooting
 
-### WoVoice does not appear
+### Android: WoVoice doesn't appear as my keyboard
 
 1. Open **WoVoice → Settings → Setup**.
-2. Tap **Enable** and confirm WoVoice is turned on.
+2. Tap **Enable** and make sure WoVoice is switched on.
 3. Tap **Choose** and select WoVoice.
-4. Tap a normal text field again.
+4. Tap a text box again.
 
-### “No clear speech” appears
+### Mac: holding Option does nothing
 
-- Confirm Microphone shows **Allowed and ready**.
-- Wait until the waveform screen appears before speaking.
-- Move closer to the phone and speak at a normal volume.
-- Check that a case, finger, or surface is not blocking the microphone.
-- Try a short sentence in a quieter place.
+- In WoVoice **Settings**, check that both permissions say **granted** and that **Keyboard trigger enabled** is **On**.
+- If you recently updated WoVoice, macOS may need the permission again: open the permission pane, turn WoVoice off and on, then quit and reopen WoVoice.
+- Make sure WoVoice is running — look for it in your Dock or open it from Applications.
 
-### Recording works but transcription fails
+### Mac: the text isn't pasted
 
-- Check Wi-Fi or mobile data.
-- Open **Settings → Account** and confirm the verified email and quota appear.
-- If the session expired, tap **Sign in** and complete the email code again.
-- Open [WoVoice service status](https://wovoice.aliahad.com/status) to check API availability.
+- Make sure your cursor is in a text box before you start speaking.
+- If macOS asked whether WoVoice may control **System Events** and you clicked Don't Allow, turn it back on in **System Settings → Privacy & Security → Automation → WoVoice → System Events**.
 
-### A name or term is wrong
+### "No clear speech" keeps appearing
 
-1. Open **Dictionary**.
-2. Tap **+ Add**.
-3. Enter the exact spelling.
-4. Save it and use it in the next dictation.
+- Check that the microphone permission is allowed.
+- Wait for recording to start, then speak at a normal volume a little closer to the microphone.
+- Make sure nothing is covering the microphone.
+- Try a short sentence somewhere quieter.
 
-### Text was not inserted
+### Recording works but no text comes back
 
-WoVoice protects against inserting a late result into the wrong app or field. Keep the original text field active until processing finishes, then try again if the editor changed.
+- Check your Wi-Fi or mobile data.
+- Open your account and check that your email and remaining time are shown. If your sign-in expired, sign in again.
+- Check the [WoVoice service status](https://wovoice.aliahad.com/status).
+
+### A name or word keeps coming out wrong
+
+Add it to your **Dictionary** with the exact spelling you want, then dictate again.
+
+### Text wasn't inserted on Android
+
+WoVoice won't type into a different place than where you started. Keep the same text box open until it finishes, then try again.
 
 ### A dictation is missing from History
 
-History records only successful insertion. Check that:
+History only keeps dictations that were actually typed into an app. Cancelled, silent, failed, or abandoned recordings aren't saved. On Android, also check that History is turned on in Settings.
 
-- The result was inserted.
-- History is enabled in Settings.
-- The recording was not cancelled, silent, failed, or discarded after focus changed.
+### The keyboard's action button says something unexpected
 
-### The action key says something unexpected
-
-The destination app controls the requested editor action. WoVoice follows that request, so the same key may show Done, Enter, Next, Search, Send, or Go in different fields.
+The app you're typing in decides whether that button is Done, Enter, Next, Search, Send, or Go. WoVoice simply follows it.
 
 ## Current limits
 
-- Recognition is currently focused on English (India).
-- Each recording is limited to 60 seconds.
-- Speech-to-text requires internet access and a verified account.
-- Free beta accounts currently receive 600 validated audio seconds per UTC day.
-- The manual keyboard has no autocorrect or word-suggestion strip.
-- Cost and neuron figures are estimates for WoVoice requests, not actual account billing.
+- Recognition is focused on English (India).
+- Each recording can be up to 60 seconds.
+- Voice dictation needs an internet connection and a WoVoice account.
+- Free accounts get 10 minutes of dictation per day.
+- The Android regular keyboard has no autocorrect or word suggestions.
+- The Mac app is for macOS only; there is no Windows version yet.
 
-## macOS desktop app
+## Need help?
 
-WoVoice is also available as a native macOS dictation app: hold a key anywhere,
-speak, release, and the polished text is pasted at your cursor — the same
-worker pipeline, account, quota, and encrypted cloud history sync as the
-phone keyboard.
-
-### Install on a new Mac
-
-1. Download `wovoice-desktop-*.dmg` from
-   [Releases](https://github.com/aliahadmd/wovoice/releases/latest), open it,
-   and drag **WoVoice** into **Applications**.
-2. Launch WoVoice. On first run it asks for exactly **two permissions** (the
-   same ones Wispr Flow needs — nothing more):
-   - **Microphone** — to capture your voice while the bubble records. Audio is
-     sent to your WoVoice service for transcription and never stored there.
-   - **Device Control & Data Access** (System Settings → Privacy & Security) —
-     lets WoVoice watch for your trigger key in any app and paste the finished
-     text. It never reads your screen. Input Monitoring is deliberately *not*
-     required.
-3. Sign in once from the **Account** tab (email OTP in your browser). Your
-   phone's dictation history and Dictionary sync automatically — there is no
-   recovery key to copy between devices.
-
-### Using it
-
-- **Hold ⌥ Option**, speak, release — text is inserted at your cursor.
-- A **quick tap latches** hands-free mode; tap again to stop. Middle-click
-  hold is also available.
-- The animated bubble shows every stage: recording waveform → uploading →
-  transcribing → inserted (or the exact error).
-- Choose a different trigger key (right ⌥, ⌘, Caps Lock, 🌐 Fn) and toggle
-  sounds from **Settings**.
-
-### Building from source
-
-```bash
-cd desktop
-npm install
-npm run build:mac   # -> dist/wovoice-desktop-<version>.dmg
-```
-
-The tap trigger helper (`native/tapd.c`) is compiled automatically; the app is
-signed with your Apple Development identity so permission grants survive
-rebuilds.
+Email [support@aliahad.com](mailto:support@aliahad.com) or check the [service status page](https://wovoice.aliahad.com/status).
 
 ## License
 
-WoVoice is proprietary source-available software. Its source code may be viewed
-and evaluated, but copying, modification, redistribution, deployment, and
-commercial use are prohibited without prior written permission. See the
-[WoVoice Proprietary Source-Available License](LICENSE.md) for the complete
-terms.
+WoVoice is free to use. Its source code is published for viewing only; copying, modifying, redistributing, or using it commercially requires written permission. See the [WoVoice License](LICENSE.md).
