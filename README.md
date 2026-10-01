@@ -323,6 +323,32 @@ You stay in control of your data:
 
 Read the full [Privacy Policy](https://wovoice.aliahad.com/privacy) or learn how to [delete your account](https://wovoice.aliahad.com/delete-account).
 
+### What the WoVoice team can see
+
+WoVoice is run from a small admin console. To be open about it, here is exactly what it shows — real screenshots, with the administrator's email blurred.
+
+<p align="center">
+  <img src="docs/images/admin-overview.webp" width="760" alt="WoVoice admin console overview: number of users, successful dictations, minutes of voice processed, estimated AI cost, and the free service budget">
+</p>
+
+**The Overview** shows service-wide totals: how many people use WoVoice, how many dictations succeeded or failed, how many minutes of voice were processed, how fast results came back, and how much of the free daily service budget has been used.
+
+<p align="center">
+  <img src="docs/images/admin-user.webp" width="760" alt="WoVoice admin console user page: account status, 90-day usage, cloud sync record counts, recent activity, and signed-in devices">
+</p>
+
+**A user's page** shows that account's email and status, how much dictation time it has used, how many History items are synced and their total size, which devices are signed in, and a list of recent events such as "Transcription Succeeded" with the recording's length and processing time.
+
+<p align="center">
+  <img src="docs/images/admin-audit.webp" width="760" alt="WoVoice admin console audit log listing every administrator sign-in and action">
+</p>
+
+**The Audit log** records every administrator sign-in and every action taken on an account, so access to the console is itself accountable. Activity and audit entries are deleted after 90 days.
+
+What the console **never** shows: your voice recordings, the text you dictated, your Dictionary words, the contents of your History, or the apps you dictated into. For synced items it shows only how many there are and their total size.
+
+The console is used to keep the free service running — for example, suspending an account that abuses the service, signing out a lost device, or giving someone extra daily minutes. Each of these actions is written to the audit log.
+
 ## What the messages mean
 
 | Message | Meaning |

@@ -26,6 +26,7 @@
       <a href="#mac">Mac</a>
       <a href="#android">Android</a>
       <a href="#privacy">Privacy</a>
+      <a href="#transparency">Transparency</a>
       <a href="#faq">FAQ</a>
     </nav>
     <a class="pill-button" href="#download">Download</a>
@@ -146,7 +147,7 @@
         </ul>
         <a class="text-link reveal" href="/download/mac">Download for macOS →</a>
       </div>
-      <div class="mac-showcase reveal">
+      <div class="mac-showcase reveal" data-showcase>
         <div class="tabs" role="tablist" aria-label="Mac app screens">
           <button role="tab" aria-selected="true" aria-controls="mac-shot-home" data-tab="home">Home</button>
           <button role="tab" aria-selected="false" aria-controls="mac-shot-history" data-tab="history">History</button>
@@ -253,6 +254,50 @@
             <li><b>No ads, no tracking,</b> and no crash-reporting tools.</li>
           </ul>
           <a class="text-link" href="/privacy">Read the Privacy Policy →</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Transparency: the operator's admin console -->
+    <section class="section transparency" id="transparency">
+      <p class="kicker reveal">Transparent by design</p>
+      <h2 class="reveal">Nothing hidden.<br>Not even from us.</h2>
+      <p class="section-lead reveal">WoVoice is run from a small admin console. These are real screenshots of it, with the administrator's email blurred — so you can see exactly what the team behind WoVoice can and can't see.</p>
+      <div class="transparency-grid">
+        <div class="admin-showcase reveal" data-showcase>
+          <div class="tabs" role="tablist" aria-label="Admin console screens">
+            <button role="tab" aria-selected="true" aria-controls="admin-shot-overview" data-tab="overview">Overview</button>
+            <button role="tab" aria-selected="false" aria-controls="admin-shot-user" data-tab="user">A user</button>
+            <button role="tab" aria-selected="false" aria-controls="admin-shot-audit" data-tab="audit">Audit log</button>
+          </div>
+          <div class="admin-frame" data-tilt>
+            <img id="admin-shot-overview" class="shot is-active" data-shot="overview" src="/media/admin-overview.webp" width="1530" height="1218" loading="lazy" alt="Admin overview: users, successful dictations, minutes of voice processed, estimated AI cost, and the free service budget">
+            <img id="admin-shot-user" class="shot" data-shot="user" src="/media/admin-user.webp" width="1538" height="1216" loading="lazy" alt="Admin user page: account status, usage, synced record counts, recent activity, and signed-in devices">
+            <img id="admin-shot-audit" class="shot" data-shot="audit" src="/media/admin-audit.webp" width="1525" height="1207" loading="lazy" alt="Admin audit log listing every administrator sign-in and action">
+          </div>
+        </div>
+        <div class="visibility">
+          <div class="visibility-card can reveal">
+            <h3><span aria-hidden="true">◉</span> What the console shows</h3>
+            <ul>
+              <li>Your account email, status, and when you signed up</li>
+              <li>How much dictation time you've used</li>
+              <li>Whether each dictation succeeded, its length, and processing time</li>
+              <li>How many items you've synced, and their total size</li>
+              <li>Which devices are signed in</li>
+            </ul>
+          </div>
+          <div class="visibility-card never reveal">
+            <h3><span aria-hidden="true">⊘</span> What it never shows</h3>
+            <ul>
+              <li>Your voice recordings</li>
+              <li>The text you dictated</li>
+              <li>Your Dictionary words</li>
+              <li>What's inside your History</li>
+              <li>Which apps you dictate into</li>
+            </ul>
+          </div>
+          <p class="visibility-note reveal">Every administrator sign-in and every action on an account — like suspending abuse or signing out a lost device — is written to the audit log. Activity and audit entries are deleted after 90 days.</p>
         </div>
       </div>
     </section>

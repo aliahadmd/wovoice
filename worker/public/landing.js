@@ -116,39 +116,43 @@
   }
   runDemo();
 
-  // Mac screenshots: tabs, with gentle auto-rotation until the visitor picks one.
-  const tabs = [...document.querySelectorAll(".tabs [data-tab]")];
-  const shots = [...document.querySelectorAll(".mac-frame [data-shot]")];
-  let macTimer = null;
-  function showShot(name) {
-    tabs.forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.tab === name)));
-    shots.forEach((shot) => shot.classList.toggle("is-active", shot.dataset.shot === name));
-  }
-  tabs.forEach((tab) => tab.addEventListener("click", () => {
-    clearInterval(macTimer);
-    showShot(tab.dataset.tab);
-  }));
-  if (!reduceMotion && tabs.length) {
-    let current = 0;
-    macTimer = setInterval(() => {
-      current = (current + 1) % tabs.length;
-      showShot(tabs[current].dataset.tab);
-    }, 5000);
-  }
+  // Tabbed screenshot showcases (Mac app, admin console): each rotates gently
+  // on its own until the visitor picks a tab.
+  document.querySelectorAll("[data-showcase]").forEach((showcase) => {
+    const tabs = [...showcase.querySelectorAll("[data-tab]")];
+    const shots = [...showcase.querySelectorAll("[data-shot]")];
+    let timer = null;
+    const show = (name) => {
+      tabs.forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.tab === name)));
+      shots.forEach((shot) => shot.classList.toggle("is-active", shot.dataset.shot === name));
+    };
+    tabs.forEach((tab) => tab.addEventListener("click", () => {
+      clearInterval(timer);
+      show(tab.dataset.tab);
+    }));
+    if (!reduceMotion && tabs.length > 1) {
+      let current = 0;
+      timer = setInterval(() => {
+        current = (current + 1) % tabs.length;
+        show(tabs[current].dataset.tab);
+      }, 5000);
+    }
+  });
 
-  // Subtle 3D tilt on the Mac window.
-  const frame = document.querySelector("[data-tilt]");
-  if (frame && !reduceMotion && window.matchMedia("(hover: hover)").matches) {
-    frame.addEventListener("pointermove", (event) => {
-      const box = frame.getBoundingClientRect();
-      const x = (event.clientX - box.left) / box.width - 0.5;
-      const y = (event.clientY - box.top) / box.height - 0.5;
-      frame.style.setProperty("--ry", `${x * 8}deg`);
-      frame.style.setProperty("--rx", `${-y * 6}deg`);
-    });
-    frame.addEventListener("pointerleave", () => {
-      frame.style.setProperty("--ry", "0deg");
-      frame.style.setProperty("--rx", "0deg");
+  // Subtle 3D tilt on screenshot frames.
+  if (!reduceMotion && window.matchMedia("(hover: hover)").matches) {
+    document.querySelectorAll("[data-tilt]").forEach((frame) => {
+      frame.addEventListener("pointermove", (event) => {
+        const box = frame.getBoundingClientRect();
+        const x = (event.clientX - box.left) / box.width - 0.5;
+        const y = (event.clientY - box.top) / box.height - 0.5;
+        frame.style.setProperty("--ry", `${x * 8}deg`);
+        frame.style.setProperty("--rx", `${-y * 6}deg`);
+      });
+      frame.addEventListener("pointerleave", () => {
+        frame.style.setProperty("--ry", "0deg");
+        frame.style.setProperty("--rx", "0deg");
+      });
     });
   }
 

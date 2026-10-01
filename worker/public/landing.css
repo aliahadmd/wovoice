@@ -429,6 +429,33 @@ h3 { margin: 0 0 8px; font-size: 21px; letter-spacing: -.3px; }
 .privacy-list { margin: 0 0 22px; padding: 0; list-style: none; }
 .privacy-list li { margin-bottom: 10px; color: var(--muted); }
 
+/* Transparency (admin console) */
+.transparency-grid { display: grid; grid-template-columns: 1.3fr .9fr; gap: 40px; align-items: start; }
+.admin-frame {
+  position: relative;
+  aspect-ratio: 1530 / 1218;
+  border: 1px solid #34343e;
+  border-radius: 14px;
+  background: #121216;
+  overflow: hidden;
+  box-shadow: 0 50px 120px #000b, 0 0 0 10px #ffffff05;
+  transform: perspective(1600px) rotateY(var(--ry, 0deg)) rotateX(var(--rx, 0deg));
+  transition: transform .4s var(--ease);
+}
+.visibility { display: grid; gap: 16px; padding-top: 58px; }
+.visibility-card { padding: 24px 26px; border: 1px solid var(--line); border-radius: 20px; background: var(--card); }
+.visibility-card h3 { display: flex; align-items: center; gap: 10px; font-size: 18px; }
+.visibility-card h3 span { font-size: 16px; }
+.visibility-card.can h3 span { color: var(--lilac); }
+.visibility-card.never { border-color: #7de4b640; background: linear-gradient(180deg, #7de4b60f, var(--card)); }
+.visibility-card.never h3 span { color: var(--mint); }
+.visibility-card ul { margin: 12px 0 0; padding: 0; list-style: none; }
+.visibility-card li { position: relative; margin: 0 0 8px; padding-left: 20px; color: var(--muted); font-size: 16px; }
+.visibility-card li::before { content: ""; position: absolute; left: 2px; top: .62em; width: 7px; height: 7px; border-radius: 50%; background: var(--lilac); opacity: .7; }
+.visibility-card.never li::before { width: 10px; height: 2px; top: .78em; left: 0; border-radius: 1px; background: var(--mint); opacity: 1; }
+.visibility-card.never li { color: var(--text); }
+.visibility-note { margin: 4px 0 0; color: #8b8794; font-size: 15px; }
+
 /* Video */
 .video-frame { overflow: hidden; border: 1px solid var(--line); border-radius: 22px; background: #000; box-shadow: 0 40px 100px #000a; }
 .video-frame video { display: block; width: 100%; height: auto; }
@@ -509,7 +536,8 @@ h3 { margin: 0 0 8px; font-size: 21px; letter-spacing: -.3px; }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 1000px) {
-  .hero, .platform, .platform-reverse { grid-template-columns: 1fr; gap: 48px; }
+  .hero, .platform, .platform-reverse, .transparency-grid { grid-template-columns: 1fr; gap: 48px; }
+  .visibility { padding-top: 0; }
   .hero { min-height: 0; padding-top: 40px; }
   .platform-reverse .platform-copy { order: 0; }
   .demo-window { transform: none; }
