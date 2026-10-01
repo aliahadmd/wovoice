@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" role="img" aria-labelledby="title description">
+  <title id="title">WoVoice</title>
+  <desc id="description">A mint-green audio waveform on a dark rounded square.</desc>
+  <rect width="108" height="108" rx="24" fill="#252528"/>
+  <circle cx="54" cy="54" r="34" fill="#7DE4B6"/>
+  <g fill="#1C1E1F">
+    <rect x="34" y="47" width="7" height="14" rx="3.5"/>
+    <rect x="42.5" y="39" width="7" height="30" rx="3.5"/>
+    <rect x="51" y="31" width="7" height="46" rx="3.5"/>
+    <rect x="59.5" y="39" width="7" height="30" rx="3.5"/>
+    <rect x="68" y="47" width="7" height="14" rx="3.5"/>
+  </g>
+</svg>

@@ -1,1 +1,344 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="WoVoice is a private, speech-first Android keyboard."><title>WoVoice — Speak naturally. Type accurately.</title><link rel="stylesheet" href="/styles.css"></head><body><main><div class="brand"><span class="mark" aria-hidden="true"></span>WoVoice</div><h1>Speak naturally.<br>Type accurately.</h1><p class="lead">A speech-first Android keyboard with automatic punctuation, light grammar polish, a complete manual keyboard, and encrypted cloud sync across your devices.</p><div class="actions"><a class="button" href="https://github.com/aliahadmd/wovoice/releases/latest">Download for Android</a><a class="button secondary" href="https://github.com/aliahadmd/wovoice">View source</a></div><div class="card"><h2>Free public beta</h2><p class="lead">Verified accounts receive up to 10 minutes of dictation each day. Audio and raw transcripts are processed transiently and are not retained.</p></div><footer><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/delete-account">Delete account</a> · <a href="/status">Service status</a></footer></main></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="WoVoice turns your speech into clean, punctuated text in any app — on your Mac and your Android phone. Free, private, tuned for English (India).">
+  <meta name="theme-color" content="#111114">
+  <meta property="og:title" content="WoVoice — Speak naturally. Get ready-to-use text.">
+  <meta property="og:description" content="Private voice dictation for Mac and Android. Hold a key or tap the mic, speak, and polished text appears where you were typing.">
+  <meta property="og:image" content="https://wovoice.aliahad.com/media/video-poster.jpg">
+  <title>WoVoice — Speak naturally. Get ready-to-use text.</title>
+  <link rel="icon" href="/media/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/landing.css">
+  <script src="/landing.js" defer></script>
+</head>
+<body>
+  <div class="aurora" aria-hidden="true"><span></span><span></span><span></span></div>
+
+  <header class="nav" id="top">
+    <a class="brand" href="/" aria-label="WoVoice home">
+      <img src="/media/logo.svg" width="32" height="32" alt="">
+      <span>WoVoice</span>
+    </a>
+    <nav aria-label="Sections">
+      <a href="#how">How it works</a>
+      <a href="#mac">Mac</a>
+      <a href="#android">Android</a>
+      <a href="#privacy">Privacy</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a class="pill-button" href="#download">Download</a>
+  </header>
+
+  <main>
+    <!-- Hero -->
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow reveal"><span class="dot"></span>Free public beta · Mac &amp; Android</p>
+        <h1 class="reveal">Speak naturally.<br><span class="gradient-text">Get ready-to-use text.</span></h1>
+        <p class="lead reveal">WoVoice turns what you say into clean, punctuated sentences and puts them exactly where you were typing — in any app, on your Mac and your phone.</p>
+        <div class="downloads reveal" data-downloads>
+          <a class="store-button" data-platform="mac" href="https://github.com/aliahadmd/wovoice/releases/download/desktop-v1.1.0/wovoice-desktop-1.1.0.dmg">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.4 12.6c0-2.4 2-3.6 2.1-3.7-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.7.9-.8 0-1.9-.9-3.2-.8-1.6 0-3.2 1-4 2.5-1.7 3-.4 7.4 1.2 9.8.8 1.2 1.8 2.5 3 2.4 1.2 0 1.7-.8 3.1-.8 1.5 0 1.9.8 3.2.8 1.3 0 2.1-1.2 2.9-2.4.9-1.3 1.3-2.7 1.3-2.7-.1 0-2.4-.9-2.4-4.1ZM14 5.4c.7-.8 1.1-1.9 1-3-1 0-2.1.7-2.8 1.5-.6.7-1.2 1.8-1 2.9 1.1.1 2.1-.6 2.8-1.4Z"/></svg>
+            <span><small>Download for</small>macOS</span>
+          </a>
+          <a class="store-button" data-platform="android" href="https://github.com/aliahadmd/wovoice/releases/download/v1.6.0/WoVoice-1.6.0.apk">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.6 9.5 19.4 6.4a.4.4 0 0 0-.7-.4l-1.8 3.1A11 11 0 0 0 12 8a11 11 0 0 0-4.9 1.1L5.3 6a.4.4 0 0 0-.7.4l1.8 3.1A10.4 10.4 0 0 0 1 18h22a10.4 10.4 0 0 0-5.4-8.5ZM7 15.3a1 1 0 1 1 0-2 1 1 0 0 1 0 2Zm10 0a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"/></svg>
+            <span><small>Download for</small>Android</span>
+          </a>
+        </div>
+        <p class="fineprint reveal">macOS 12+ · Android 7.0+ · 10 free minutes of dictation every day</p>
+      </div>
+
+      <!-- Live demo: a text field that fills itself from "speech" -->
+      <div class="demo reveal" aria-label="Animated example of WoVoice turning speech into text">
+        <div class="demo-window">
+          <div class="demo-bar"><i></i><i></i><i></i><span>New message</span></div>
+          <div class="demo-body">
+            <p class="demo-to">To: <b>Priya</b></p>
+            <p class="demo-field"><span id="demo-output"></span><span class="caret"></span></p>
+          </div>
+        </div>
+        <div class="bubble" id="demo-bubble" data-state="listening">
+          <span class="rec"></span>
+          <span class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+          <span class="bubble-text">
+            <b id="demo-status">Listening…</b>
+            <small id="demo-heard">“can we meet tomorrow morning”</small>
+          </span>
+          <kbd>⌥</kbd>
+        </div>
+      </div>
+    </section>
+
+    <!-- Marquee of things you can say -->
+    <section class="marquee" aria-label="Examples of apps WoVoice works in">
+      <div class="marquee-track">
+        <span>Messages</span><span>Gmail</span><span>WhatsApp</span><span>Slack</span><span>Notes</span><span>Google Docs</span><span>Chrome</span><span>Notion</span><span>Outlook</span><span>Telegram</span>
+        <span aria-hidden="true">Messages</span><span aria-hidden="true">Gmail</span><span aria-hidden="true">WhatsApp</span><span aria-hidden="true">Slack</span><span aria-hidden="true">Notes</span><span aria-hidden="true">Google Docs</span><span aria-hidden="true">Chrome</span><span aria-hidden="true">Notion</span><span aria-hidden="true">Outlook</span><span aria-hidden="true">Telegram</span>
+      </div>
+    </section>
+
+    <!-- How it works -->
+    <section class="section" id="how">
+      <p class="kicker reveal">How it works</p>
+      <h2 class="reveal">Three steps. No typing.</h2>
+      <ol class="steps">
+        <li class="step reveal">
+          <div class="step-icon"><span class="key">⌥</span></div>
+          <h3>Hold or tap</h3>
+          <p>Hold <b>⌥ Option</b> on your Mac, or tap the big microphone on your phone's WoVoice keyboard.</p>
+        </li>
+        <li class="step reveal">
+          <div class="step-icon wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+          <h3>Speak your thought</h3>
+          <p>Talk the way you normally would. No need to say “comma” or “full stop” — up to 60 seconds at a time.</p>
+        </li>
+        <li class="step reveal">
+          <div class="step-icon"><span class="check">✓</span></div>
+          <h3>Text appears</h3>
+          <p>Release or tap again. Punctuated, lightly cleaned text lands right where your cursor was.</p>
+        </li>
+      </ol>
+    </section>
+
+    <!-- Before / after -->
+    <section class="section transform-section">
+      <p class="kicker reveal">Writes what you meant</p>
+      <h2 class="reveal">From spoken words to finished text.</h2>
+      <p class="section-lead reveal">Punctuation, capitals, numbers, and line breaks are handled for you. Your names, numbers, and meaning never change.</p>
+      <div class="pairs">
+        <div class="pair reveal">
+          <p class="said">“my order number is four eight two nine”</p>
+          <span class="arrow" aria-hidden="true"></span>
+          <p class="got">My order number is 4829.</p>
+        </div>
+        <div class="pair reveal">
+          <p class="said">“um so can we push the call to friday”</p>
+          <span class="arrow" aria-hidden="true"></span>
+          <p class="got">So, can we push the call to Friday?</p>
+        </div>
+        <div class="pair reveal">
+          <p class="said">“thank you new paragraph please send the report”</p>
+          <span class="arrow" aria-hidden="true"></span>
+          <p class="got">Thank you.<br><br>Please send the report.</p>
+        </div>
+        <div class="pair reveal">
+          <p class="said">“first item new line second item”</p>
+          <span class="arrow" aria-hidden="true"></span>
+          <p class="got">First item<br>Second item</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Mac -->
+    <section class="section platform" id="mac">
+      <div class="platform-copy">
+        <p class="kicker reveal">WoVoice for Mac</p>
+        <h2 class="reveal">Hold a key.<br>Speak anywhere.</h2>
+        <p class="section-lead reveal">WoVoice lives quietly in the background. Hold <b>⌥ Option</b> in any app, talk, and let go — the text is typed at your cursor and your clipboard is left exactly as it was.</p>
+        <ul class="checks reveal">
+          <li>Quick-tap to dictate hands-free, or hold the middle mouse button</li>
+          <li>Choose your key: ⌥ Option, ⌘ Command, Caps Lock, or 🌐 fn</li>
+          <li>Press <kbd>esc</kbd> to cancel at any time</li>
+          <li>Only two permissions — it never reads your screen</li>
+        </ul>
+        <a class="text-link reveal" href="https://github.com/aliahadmd/wovoice/releases/download/desktop-v1.1.0/wovoice-desktop-1.1.0.dmg">Download for macOS →</a>
+      </div>
+      <div class="mac-showcase reveal">
+        <div class="tabs" role="tablist" aria-label="Mac app screens">
+          <button role="tab" aria-selected="true" aria-controls="mac-shot-home" data-tab="home">Home</button>
+          <button role="tab" aria-selected="false" aria-controls="mac-shot-history" data-tab="history">History</button>
+          <button role="tab" aria-selected="false" aria-controls="mac-shot-settings" data-tab="settings">Settings</button>
+        </div>
+        <div class="mac-frame" data-tilt>
+          <img id="mac-shot-home" class="shot is-active" data-shot="home" src="/media/mac-home.png" width="1065" height="765" alt="WoVoice Home on Mac: today's dictations, time, words, speaking pace, and recent dictations">
+          <img id="mac-shot-history" class="shot" data-shot="history" src="/media/mac-history.png" width="1060" height="760" loading="lazy" alt="WoVoice History on Mac with search, copy, and delete">
+          <img id="mac-shot-settings" class="shot shot-tall" data-shot="settings" src="/media/mac-settings.png" width="1049" height="1269" loading="lazy" alt="WoVoice Settings on Mac with trigger key, permissions, and startup options">
+        </div>
+        <img class="float-bubble" src="/media/mac-recording-bubble.png" width="482" height="107" alt="The WoVoice recording bubble: Listening, release Option to transcribe">
+      </div>
+    </section>
+
+    <!-- Android -->
+    <section class="section platform platform-reverse" id="android">
+      <div class="platform-copy">
+        <p class="kicker reveal">WoVoice for Android</p>
+        <h2 class="reveal">A keyboard that listens.</h2>
+        <p class="section-lead reveal">WoVoice replaces typing in any text box. Tap the mic, speak, tap again — and switch to a full QWERTY keyboard with symbols and emoji whenever you want to type by hand.</p>
+        <ul class="checks reveal">
+          <li>Works in every app: chats, email, browsers, notes</li>
+          <li>Never types into the wrong field if you switch away</li>
+          <li>Voice turns off automatically in password and PIN fields</li>
+          <li>Home stats: words, speaking time, and pace</li>
+        </ul>
+        <a class="text-link reveal" href="https://github.com/aliahadmd/wovoice/releases/download/v1.6.0/WoVoice-1.6.0.apk">Download for Android →</a>
+      </div>
+      <div class="phone-stage reveal">
+        <div class="phone phone-back"><img src="/media/wovoice-dictionary.png" width="720" height="1600" loading="lazy" alt="WoVoice Dictionary screen on Android"></div>
+        <div class="phone phone-front" data-carousel>
+          <img class="slide is-active" src="/media/wovoice-home.png" width="720" height="1600" loading="lazy" alt="WoVoice Home dashboard on Android">
+          <img class="slide" src="/media/keyboard-recording.png" width="720" height="1600" loading="lazy" alt="WoVoice keyboard recording speech with a live waveform">
+          <img class="slide" src="/media/wovoice-dictionary.png" width="720" height="1600" loading="lazy" alt="WoVoice Dictionary with saved names and terms">
+        </div>
+        <div class="dots" data-carousel-dots aria-hidden="true"><i class="is-active"></i><i></i><i></i></div>
+      </div>
+    </section>
+
+    <!-- Keyboard strip -->
+    <section class="section keyboards">
+      <p class="kicker reveal">Plus a real keyboard</p>
+      <h2 class="reveal">Type by hand whenever you like.</h2>
+      <p class="section-lead reveal">Swipe sideways for letters, numbers, symbols, and emoji. It works offline, with no account needed.</p>
+      <div class="keyboard-row">
+        <figure class="reveal"><img src="/media/keyboard-voice-idle.png" width="720" height="649" loading="lazy" alt="Voice mode, ready to record"><figcaption>Voice</figcaption></figure>
+        <figure class="reveal"><img src="/media/keyboard-manual.png" width="720" height="649" loading="lazy" alt="Letters with shift"><figcaption>Letters</figcaption></figure>
+        <figure class="reveal"><img src="/media/keyboard-numbers.png" width="720" height="649" loading="lazy" alt="Numbers and punctuation"><figcaption>Numbers</figcaption></figure>
+        <figure class="reveal"><img src="/media/keyboard-symbols.png" width="720" height="649" loading="lazy" alt="More symbols"><figcaption>Symbols</figcaption></figure>
+      </div>
+    </section>
+
+    <!-- Features -->
+    <section class="section" id="features">
+      <p class="kicker reveal">Everything included</p>
+      <h2 class="reveal">Small details that save you time.</h2>
+      <div class="features">
+        <article class="feature reveal" data-glow>
+          <span class="feature-icon">Aa</span>
+          <h3>Personal Dictionary</h3>
+          <p>Add names, places, brands, and specialist terms so they're spelled right every time. WoVoice can suggest words you correct.</p>
+        </article>
+        <article class="feature reveal" data-glow>
+          <span class="feature-icon">⟲</span>
+          <h3>Synced everywhere</h3>
+          <p>Sign in on your phone and Mac with the same email — your History and Dictionary follow you. No recovery keys.</p>
+        </article>
+        <article class="feature reveal" data-glow>
+          <span class="feature-icon">≡</span>
+          <h3>Searchable History</h3>
+          <p>Find, copy, or delete anything you've dictated. Choose to auto-delete after 30 days, 90 days, or a year.</p>
+        </article>
+        <article class="feature reveal" data-glow>
+          <span class="feature-icon">IN</span>
+          <h3>Tuned for India</h3>
+          <p>Built for English (India), with care for South Asian pronunciation, names, and numbers.</p>
+        </article>
+        <article class="feature reveal" data-glow>
+          <span class="feature-icon">↵</span>
+          <h3>Spoken line breaks</h3>
+          <p>Say “new line” or “new paragraph” to format lists, emails, and notes as you speak.</p>
+        </article>
+        <article class="feature reveal" data-glow>
+          <span class="feature-icon">✉</span>
+          <h3>No password</h3>
+          <p>Sign in with a six-digit code sent to your email. That's it.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- Privacy -->
+    <section class="section privacy" id="privacy">
+      <div class="privacy-card reveal">
+        <div class="shield" aria-hidden="true">
+          <svg viewBox="0 0 64 64"><path d="M32 4 8 13v17c0 15 10 26 24 30 14-4 24-15 24-30V13L32 4Z"/><path class="tick" d="m21 32 8 8 15-16"/></svg>
+        </div>
+        <div>
+          <p class="kicker">Private by design</p>
+          <h2>Your voice is never stored.</h2>
+          <ul class="privacy-list">
+            <li><b>Recordings are deleted</b> as soon as your text is ready.</li>
+            <li><b>Only what you dictate is sent</b> — never the surrounding text, your clipboard, contacts, or which app you're in.</li>
+            <li><b>Synced data is encrypted</b> with a key unique to your account.</li>
+            <li><b>No ads, no tracking,</b> and no crash-reporting tools.</li>
+          </ul>
+          <a class="text-link" href="/privacy">Read the Privacy Policy →</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Video -->
+    <section class="section video-section">
+      <p class="kicker reveal">See it in action</p>
+      <h2 class="reveal">25 seconds of WoVoice.</h2>
+      <div class="video-frame reveal">
+        <video controls preload="none" playsinline poster="/media/video-poster.jpg" width="1280" height="720">
+          <source src="/media/wovoice-video.mp4" type="video/mp4">
+        </video>
+      </div>
+    </section>
+
+    <!-- Numbers -->
+    <section class="section stats">
+      <div class="stat reveal"><b data-count="10">0</b><span>free minutes<br>every day</span></div>
+      <div class="stat reveal"><b data-count="60">0</b><span>seconds per<br>recording</span></div>
+      <div class="stat reveal"><b data-count="1000">0</b><span>Dictionary<br>terms</span></div>
+      <div class="stat reveal"><b data-count="2">0</b><span>platforms,<br>one account</span></div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="section faq" id="faq">
+      <p class="kicker reveal">Questions</p>
+      <h2 class="reveal">Good to know.</h2>
+      <div class="faq-list">
+        <details class="reveal">
+          <summary>Is WoVoice free?</summary>
+          <p>Yes. WoVoice is a free public beta. Every account gets 10 minutes of dictation per day, which resets at midnight UTC (5:30 AM in India). There are no ads and nothing to buy.</p>
+        </details>
+        <details class="reveal">
+          <summary>Why isn't it on the Play Store or App Store?</summary>
+          <p>During the beta, WoVoice is distributed directly. On Android, allow your browser to install the downloaded app when asked. On Mac, if macOS says it can't verify the app, open System Settings → Privacy &amp; Security and click <b>Open Anyway</b>.</p>
+        </details>
+        <details class="reveal">
+          <summary>Which permissions does it need?</summary>
+          <p>On Android: the microphone, and turning WoVoice on as a keyboard. On Mac: the microphone and Accessibility (Device Control &amp; Data Access), which lets WoVoice notice your dictation key and paste the text. Nothing else.</p>
+        </details>
+        <details class="reveal">
+          <summary>Does it work offline?</summary>
+          <p>Voice dictation needs an internet connection. The Android keyboard's regular typing mode always works, even offline.</p>
+        </details>
+        <details class="reveal">
+          <summary>Which languages are supported?</summary>
+          <p>WoVoice is tuned for English (India) and handles Indian names and pronunciation well. More languages may come later.</p>
+        </details>
+        <details class="reveal">
+          <summary>How do I delete my data?</summary>
+          <p>You can clear History or turn off History sync in the app at any time. To remove everything, <a href="/delete-account">delete your account</a> — it takes a fresh email code and removes every synced item.</p>
+        </details>
+      </div>
+    </section>
+
+    <!-- Final CTA -->
+    <section class="section cta" id="download">
+      <div class="cta-card reveal">
+        <img class="cta-logo" src="/media/logo.svg" width="88" height="88" alt="">
+        <h2>Start talking. Stop typing.</h2>
+        <p class="section-lead">Download WoVoice, sign in with your email, and dictate your first message in under a minute.</p>
+        <div class="downloads" data-downloads>
+          <a class="store-button" data-platform="mac" href="https://github.com/aliahadmd/wovoice/releases/download/desktop-v1.1.0/wovoice-desktop-1.1.0.dmg">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.4 12.6c0-2.4 2-3.6 2.1-3.7-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.7.9-.8 0-1.9-.9-3.2-.8-1.6 0-3.2 1-4 2.5-1.7 3-.4 7.4 1.2 9.8.8 1.2 1.8 2.5 3 2.4 1.2 0 1.7-.8 3.1-.8 1.5 0 1.9.8 3.2.8 1.3 0 2.1-1.2 2.9-2.4.9-1.3 1.3-2.7 1.3-2.7-.1 0-2.4-.9-2.4-4.1ZM14 5.4c.7-.8 1.1-1.9 1-3-1 0-2.1.7-2.8 1.5-.6.7-1.2 1.8-1 2.9 1.1.1 2.1-.6 2.8-1.4Z"/></svg>
+            <span><small>Version 1.1.0 · .dmg</small>macOS</span>
+          </a>
+          <a class="store-button" data-platform="android" href="https://github.com/aliahadmd/wovoice/releases/download/v1.6.0/WoVoice-1.6.0.apk">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.6 9.5 19.4 6.4a.4.4 0 0 0-.7-.4l-1.8 3.1A11 11 0 0 0 12 8a11 11 0 0 0-4.9 1.1L5.3 6a.4.4 0 0 0-.7.4l1.8 3.1A10.4 10.4 0 0 0 1 18h22a10.4 10.4 0 0 0-5.4-8.5ZM7 15.3a1 1 0 1 1 0-2 1 1 0 0 1 0 2Zm10 0a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"/></svg>
+            <span><small>Version 1.6.0 · .apk</small>Android</span>
+          </a>
+        </div>
+        <p class="fineprint"><a href="https://github.com/aliahadmd/wovoice/releases">All releases and checksums</a> · <a href="https://github.com/aliahadmd/wovoice#readme">Setup guide</a></p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <a class="brand" href="#top"><img src="/media/logo.svg" width="24" height="24" alt=""><span>WoVoice</span></a>
+    <nav aria-label="Legal and support">
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+      <a href="/delete-account">Delete account</a>
+      <a href="/status">Service status</a>
+      <a href="mailto:support@aliahad.com">Support</a>
+    </nav>
+    <p>© 2026 Ali Ahad</p>
+  </footer>
+</body>
+</html>
