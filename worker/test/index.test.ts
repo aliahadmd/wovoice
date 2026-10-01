@@ -816,6 +816,102 @@ describe("usage estimates", () => {
   });
 });
 
+describe("download links", () => {
+  const asset = (tag: string, name: string) => ({
+    name,
+    browser_download_url: `https://github.com/aliahadmd/wovoice/releases/download/${tag}/${name}`,
+  });
+  const apiReleases = [
+    { tag_name: "v1.7.0", draft: true, prerelease: false, published_at: "2026-10-03T00:00:00Z", assets: [asset("v1.7.0", "WoVoice-1.7.0.apk")] },
+    { tag_name: "desktop-v1.2.0", draft: false, prerelease: true, published_at: "2026-10-02T00:00:00Z", assets: [asset("desktop-v1.2.0", "wovoice-desktop-1.2.0.dmg")] },
+    { tag_name: "v1.6.1", draft: false, prerelease: false, published_at: "2026-10-01T00:00:00Z", assets: [] },
+    { tag_name: "v1.6.0", draft: false, prerelease: false, published_at: "2026-09-26T14:59:42Z", assets: [asset("v1.6.0", "WoVoice-1.6.0.apk"), asset("v1.6.0", "WoVoice-1.6.0.apk.sha256")] },
+    { tag_name: "desktop-v1.1.0", draft: false, prerelease: false, published_at: "2026-09-26T14:59:03Z", assets: [asset("desktop-v1.1.0", "wovoice-desktop-1.1.0.dmg")] },
+  ];
+  const feed = `<feed>
+    <entry><link rel="alternate" type="text/html" href="https://github.com/aliahadmd/wovoice/releases/tag/v1.6.0"/></entry>
+    <entry><link rel="alternate" type="text/html" href="https://github.com/aliahadmd/wovoice/releases/tag/desktop-v1.1.0"/></entry>
+    <entry><link rel="alternate" type="text/html" href="https://github.com/aliahadmd/wovoice/releases/tag/v1.5.1"/></entry>
+  </feed>`;
+
+  // Each source is a factory: a Response body can be read only once.
+  function downloadHandler(responses: { api?: () => Response; feed?: () => Response }, cache: Cache | null = null) {
+    const fetchMock = vi.fn(async (input: string) => {
+      if (input.startsWith("https://api.github.com/")) return responses.api?.() ?? new Response("down", { status: 503 });
+      if (input.endsWith("/releases.atom")) return responses.feed?.() ?? new Response("down", { status: 503 });
+      throw new Error(`unexpected fetch ${input}`);
+    });
+    return { fetchMock, handler: createHandler(fakeServices(), undefined, undefined, { fetch: fetchMock, cache: () => cache }) };
+  }
+
+  function memoryCache(): Cache {
+    const entries = new Map<string, Response>();
+    return {
+      match: async (key: RequestInfo | URL) => entries.get(String(key))?.clone(),
+      put: async (key: RequestInfo | URL, response: Response) => { entries.set(String(key), response.clone()); },
+    } as unknown as Cache;
+  }
+
+  it("redirects each platform to its newest published asset", async () => {
+    const { handler } = downloadHandler({ api: () => Response.json(apiReleases) });
+    const mac = await handler(new Request("https://wovoice.aliahad.com/download/mac"), fakeEnv());
+    const android = await handler(new Request("https://wovoice.aliahad.com/download/android"), fakeEnv());
+    expect(mac.status).toBe(302);
+    // Drafts, prereleases, and releases without the platform's file are skipped.
+    expect(mac.headers.get("location")).toBe(
+      "https://github.com/aliahadmd/wovoice/releases/download/desktop-v1.1.0/wovoice-desktop-1.1.0.dmg",
+    );
+    expect(android.headers.get("location")).toBe(
+      "https://github.com/aliahadmd/wovoice/releases/download/v1.6.0/WoVoice-1.6.0.apk",
+    );
+  });
+
+  it("reports both versions for the website labels", async () => {
+    const { handler } = downloadHandler({ api: () => Response.json(apiReleases) });
+    const response = await handler(new Request("https://wovoice.aliahad.com/download/latest.json"), fakeEnv());
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      mac: { version: "1.1.0" },
+      android: { version: "1.6.0" },
+      releasesUrl: "https://github.com/aliahadmd/wovoice/releases",
+    });
+  });
+
+  it("falls back to the release feed when the API is rate-limited", async () => {
+    const { handler } = downloadHandler({ api: () => new Response("limit", { status: 403 }), feed: () => new Response(feed) });
+    const response = await handler(new Request("https://wovoice.aliahad.com/download/mac"), fakeEnv());
+    expect(response.headers.get("location")).toBe(
+      "https://github.com/aliahadmd/wovoice/releases/download/desktop-v1.1.0/wovoice-desktop-1.1.0.dmg",
+    );
+  });
+
+  it("sends visitors to the Releases page and skips caching when GitHub is unreachable", async () => {
+    const cache = memoryCache();
+    const { handler, fetchMock } = downloadHandler({}, cache);
+    const first = await handler(new Request("https://wovoice.aliahad.com/download/android"), fakeEnv());
+    expect(first.status).toBe(302);
+    expect(first.headers.get("location")).toBe("https://github.com/aliahadmd/wovoice/releases");
+    await handler(new Request("https://wovoice.aliahad.com/download/android"), fakeEnv());
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("caches a complete answer so GitHub is asked once", async () => {
+    const cache = memoryCache();
+    const { handler, fetchMock } = downloadHandler({ api: () => Response.json(apiReleases) }, cache);
+    await handler(new Request("https://wovoice.aliahad.com/download/mac"), fakeEnv());
+    const second = await handler(new Request("https://wovoice.aliahad.com/download/android"), fakeEnv());
+    expect(second.headers.get("location")).toContain("WoVoice-1.6.0.apk");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects unknown download paths and methods", async () => {
+    const { handler, fetchMock } = downloadHandler({});
+    expect((await handler(new Request("https://wovoice.aliahad.com/download/windows"), fakeEnv())).status).toBe(404);
+    expect((await handler(new Request("https://wovoice.aliahad.com/download/mac", { method: "POST" }), fakeEnv())).status).toBe(405);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 function authFixture(services: Services = fakeServices()) {
   const sent: Array<{ email: string; code: string }> = [];
   const authServices: AuthServices = {

@@ -1,0 +1,190 @@
+/**
+ * Stable download links for the website: /download/mac and /download/android
+ * redirect to the newest release's DMG or APK on GitHub, and /download/latest.json
+ * reports both versions for the page's labels. Releases never require a page edit.
+ *
+ * GitHub's REST API is authoritative (it lists each release's real assets), but
+ * unauthenticated calls share a 60-per-hour budget per egress address, so the
+ * answer is cached and the public Atom feed (named by the release workflow's
+ * fixed asset names) is the fallback. If both fail, visitors land on the
+ * Releases page instead of a broken link.
+ */
+
+const REPOSITORY = "aliahadmd/wovoice";
+const RELEASES_PAGE = `https://github.com/${REPOSITORY}/releases`;
+const ASSET_PREFIX = `https://github.com/${REPOSITORY}/releases/download/`;
+const CACHE_KEY = "https://wovoice.aliahad.com/__cache/github-releases-v1";
+const CACHE_SECONDS = 600;
+const LINK_MAX_AGE_SECONDS = 300;
+
+export type DownloadPlatform = "mac" | "android";
+
+export interface DownloadInfo {
+  version: string;
+  url: string;
+  publishedAt: string | null;
+}
+
+export type LatestDownloads = Record<DownloadPlatform, DownloadInfo | null>;
+
+export interface DownloadDeps {
+  fetch: (input: string, init?: RequestInit) => Promise<Response>;
+  /** Returns the edge cache, or null where none is available. */
+  cache: () => Cache | null;
+}
+
+export const productionDownloadDeps: DownloadDeps = {
+  fetch: (input, init) => fetch(input, init),
+  cache: () => (typeof caches === "undefined" ? null : caches.default),
+};
+
+/** Each platform's tag and asset naming, as produced by .github/workflows/release.yml. */
+const PLATFORMS: Record<DownloadPlatform, { tag: RegExp; extension: string; assetName: (version: string) => string }> = {
+  mac: {
+    tag: /^desktop-v(\d+(?:\.\d+)*)$/u,
+    extension: ".dmg",
+    assetName: (version) => `wovoice-desktop-${version}.dmg`,
+  },
+  android: {
+    tag: /^v(\d+(?:\.\d+)*)$/u,
+    extension: ".apk",
+    assetName: (version) => `WoVoice-${version}.apk`,
+  },
+};
+
+export async function handleDownloadRoute(
+  request: Request,
+  ctx: ExecutionContext | undefined,
+  deps: DownloadDeps = productionDownloadDeps,
+): Promise<Response | null> {
+  const url = new URL(request.url);
+  if (!url.pathname.startsWith("/download/")) return null;
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response(null, { status: 405, headers: { Allow: "GET, HEAD" } });
+  }
+  const platform = url.pathname === "/download/mac"
+    ? "mac"
+    : url.pathname === "/download/android" ? "android" : null;
+  if (url.pathname !== "/download/latest.json" && platform === null) {
+    return new Response("Not found", { status: 404 });
+  }
+
+  const latest = await latestDownloads(deps, ctx);
+  if (platform === null) {
+    return Response.json(
+      { ...latest, releasesUrl: RELEASES_PAGE },
+      { headers: { "Cache-Control": `public, max-age=${LINK_MAX_AGE_SECONDS}` } },
+    );
+  }
+  const target = latest[platform]?.url ?? RELEASES_PAGE;
+  return new Response(null, {
+    status: 302,
+    headers: { Location: target, "Cache-Control": `public, max-age=${LINK_MAX_AGE_SECONDS}` },
+  });
+}
+
+/** The newest DMG and APK; never throws (a platform it cannot resolve is null). */
+export async function latestDownloads(deps: DownloadDeps, ctx?: ExecutionContext): Promise<LatestDownloads> {
+  const cache = deps.cache();
+  const cached = await cache?.match(CACHE_KEY).catch(() => undefined);
+  if (cached) {
+    try {
+      return (await cached.json()) as LatestDownloads;
+    } catch {
+      // A damaged cache entry is simply refreshed below.
+    }
+  }
+
+  let latest: LatestDownloads = { mac: null, android: null };
+  try {
+    latest = await fromApi(deps);
+  } catch (error) {
+    console.error(JSON.stringify({ event: "download_api_failed", reason: String(error).slice(0, 200) }));
+  }
+  if (!latest.mac || !latest.android) {
+    try {
+      const feed = await fromFeed(deps);
+      latest = { mac: latest.mac ?? feed.mac, android: latest.android ?? feed.android };
+    } catch (error) {
+      console.error(JSON.stringify({ event: "download_feed_failed", reason: String(error).slice(0, 200) }));
+    }
+  }
+
+  // Cache only complete answers, so a partial outage is retried on the next visit.
+  if (cache && latest.mac && latest.android) {
+    const write = cache.put(
+      CACHE_KEY,
+      Response.json(latest, { headers: { "Cache-Control": `public, max-age=${CACHE_SECONDS}` } }),
+    ).catch(() => undefined);
+    if (ctx) ctx.waitUntil(write);
+    else await write;
+  }
+  return latest;
+}
+
+interface GitHubRelease {
+  tag_name?: unknown;
+  draft?: unknown;
+  prerelease?: unknown;
+  published_at?: unknown;
+  assets?: Array<{ name?: unknown; browser_download_url?: unknown }>;
+}
+
+async function fromApi(deps: DownloadDeps): Promise<LatestDownloads> {
+  const response = await deps.fetch(`https://api.github.com/repos/${REPOSITORY}/releases?per_page=50`, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "wovoice-website",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (!response.ok) throw new Error(`GitHub API answered ${response.status}`);
+  const releases = (await response.json()) as GitHubRelease[];
+  if (!Array.isArray(releases)) throw new Error("GitHub API returned an unexpected shape");
+  const published = releases
+    .filter((release) => release.draft !== true && release.prerelease !== true)
+    .sort((left, right) => String(right.published_at ?? "").localeCompare(String(left.published_at ?? "")));
+
+  const pick = (platform: DownloadPlatform): DownloadInfo | null => {
+    const rule = PLATFORMS[platform];
+    for (const release of published) {
+      const match = typeof release.tag_name === "string" ? rule.tag.exec(release.tag_name) : null;
+      if (!match) continue;
+      const asset = release.assets?.find((candidate) =>
+        typeof candidate.name === "string"
+        && candidate.name.endsWith(rule.extension)
+        && typeof candidate.browser_download_url === "string"
+        && candidate.browser_download_url.startsWith(ASSET_PREFIX));
+      if (!asset) continue;
+      return {
+        version: match[1],
+        url: asset.browser_download_url as string,
+        publishedAt: typeof release.published_at === "string" ? release.published_at : null,
+      };
+    }
+    return null;
+  };
+  return { mac: pick("mac"), android: pick("android") };
+}
+
+async function fromFeed(deps: DownloadDeps): Promise<LatestDownloads> {
+  const response = await deps.fetch(`${RELEASES_PAGE}.atom`, {
+    headers: { Accept: "application/atom+xml", "User-Agent": "wovoice-website" },
+  });
+  if (!response.ok) throw new Error(`GitHub feed answered ${response.status}`);
+  const feed = await response.text();
+  // The feed lists releases newest first; drafts never appear in it.
+  const tags = [...feed.matchAll(/\/releases\/tag\/([A-Za-z0-9._-]+)"/gu)].map((match) => match[1]);
+
+  const pick = (platform: DownloadPlatform): DownloadInfo | null => {
+    const rule = PLATFORMS[platform];
+    for (const tag of tags) {
+      const match = rule.tag.exec(tag);
+      if (match) {
+        return { version: match[1], url: `${ASSET_PREFIX}${tag}/${rule.assetName(match[1])}`, publishedAt: null };
+      }
+    }
+    return null;
+  };
+  return { mac: pick("mac"), android: pick("android") };
+}

@@ -21,6 +21,20 @@
     });
   }
 
+  // Version labels come from the Worker, which follows the newest GitHub release.
+  const versionLabels = document.querySelectorAll("[data-version]");
+  if (versionLabels.length) {
+    fetch("/download/latest.json")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((latest) => {
+        versionLabels.forEach((label) => {
+          const version = latest?.[label.dataset.version]?.version;
+          if (version) label.textContent = `Version ${version} · ${label.dataset.extension}`;
+        });
+      })
+      .catch(() => {});
+  }
+
   // Scroll reveal, staggered within each parent.
   const reveals = document.querySelectorAll(".reveal");
   reveals.forEach((element) => {

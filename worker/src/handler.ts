@@ -12,6 +12,7 @@ import {
   WHISPER_NEURONS_PER_MINUTE,
   WHISPER_USD_PER_MINUTE,
 } from "./pricing";
+import { handleDownloadRoute, productionDownloadDeps, type DownloadDeps } from "./downloads";
 import { productionServices } from "./models";
 import { parseOptions } from "./options";
 import { completeQuota, releaseQuota, reserveQuota, type QuotaReservation } from "./quota";
@@ -34,9 +35,12 @@ export function createHandler(
   services: Services = productionServices,
   authServices: AuthServices = productionAuthServices,
   adminServices: AdminServices = productionAdminServices,
+  downloadDeps: DownloadDeps = productionDownloadDeps,
 ) {
   return async (request: Request, env: AppEnv, ctx?: ExecutionContext): Promise<Response> => {
     const url = new URL(request.url);
+    const downloadResponse = await handleDownloadRoute(request, ctx, downloadDeps);
+    if (downloadResponse) return downloadResponse;
     if (request.method === "GET" && url.pathname === "/.well-known/assetlinks.json") {
       return Response.json(androidAssetLinks(env), {
         headers: {
