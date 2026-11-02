@@ -125,7 +125,7 @@ export const DashboardScene: React.FC = () => {
           Useful insights.<br />Your data stays yours.
         </div>
         <div style={{display: 'grid', gap: 28, marginTop: 56}}>
-          <Feature title="Local History" detail="Search, copy, detail and delete" delay={34} />
+          <Feature title="Synced History" detail="Search, copy and delete on every device" delay={34} />
           <Feature title="Personal Dictionary" detail="Names and terms you approve" delay={47} />
           <Feature title="Private Analytics" detail="Words, WPM and processing speed" delay={60} />
           <Feature title="Estimated AI Usage" detail="Transparent estimates, never an invoice" delay={73} />
@@ -147,7 +147,7 @@ export const DashboardScene: React.FC = () => {
             }),
           }}
         >
-          No ads · No tracking · No server-side transcript history
+          No ads · No tracking · Your voice is never stored
         </div>
       </div>
     </AbsoluteFill>

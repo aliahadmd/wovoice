@@ -1,6 +1,6 @@
 # WoVoice marketing video
 
-Editable Remotion source for the 25-second WoVoice portfolio video. It uses the real app screenshots, local transition sound effects, and a 1920×1080 H.264 composition.
+Editable Remotion source for the 37-second WoVoice portfolio video, covering the Android keyboard, the Mac app, and the admin console. It uses the real app screenshots, local transition sound effects, and a 1920×1080 H.264 composition.
 
 ## Preview
 

@@ -93,6 +93,7 @@ export const BrandScene: React.FC = () => {
           <Pill mint>ACCURATE</Pill>
           <Pill>PRIVATE</Pill>
           <Pill>ANDROID</Pill>
+          <Pill>MAC</Pill>
         </div>
         <div
           style={{
@@ -107,7 +108,7 @@ export const BrandScene: React.FC = () => {
             }),
           }}
         >
-          AI SPEECH KEYBOARD
+          AI DICTATION FOR ANDROID &amp; MAC
         </div>
       </AbsoluteFill>
     </AbsoluteFill>

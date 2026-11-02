@@ -60,7 +60,7 @@ export const OutroScene: React.FC = () => {
             }),
           }}
         >
-          A private AI speech keyboard, built end to end.
+          Private AI dictation for Android and Mac, built end to end.
         </div>
         <div
           style={{
@@ -73,8 +73,8 @@ export const OutroScene: React.FC = () => {
             }),
           }}
         >
-          <Pill>ANDROID IME</Pill>
-          <Pill>KOTLIN</Pill>
+          <Pill>ANDROID · KOTLIN</Pill>
+          <Pill>MAC · ELECTRON</Pill>
           <Pill>CLOUDFLARE WORKERS AI</Pill>
           <Pill mint>PRIVACY-FIRST</Pill>
         </div>
@@ -92,7 +92,7 @@ export const OutroScene: React.FC = () => {
             }),
           }}
         >
-          DESIGNED · ENGINEERED · DEPLOYED
+          WOVOICE.ALIAHAD.COM · DESIGNED · ENGINEERED · DEPLOYED
         </div>
       </AbsoluteFill>
     </AbsoluteFill>

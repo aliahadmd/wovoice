@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Website
+
+- Expanded the product video to 37 seconds, including Mac dictation and the admin console, with matching website media and editable video sources.
+
 ## 1.7.0 — 2026-11-02
 
 ### Web admin
