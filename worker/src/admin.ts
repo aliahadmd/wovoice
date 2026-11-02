@@ -1,4 +1,6 @@
 import { ApiError } from "./errors";
+import { handleAdminAiRoute } from "./admin-ai";
+import { productionServices } from "./models";
 import { base64Url, decryptString, fromBase64Url, hmac, randomCode, randomToken, timingSafeEqual } from "./crypto";
 import { noStoreJson, readJson } from "./http";
 import { GLOBAL_DAILY_NEURON_LIMIT, MONTHLY_EMAIL_LIMIT } from "./limits";
@@ -9,7 +11,7 @@ import {
   recordActivity,
   type AccountControlRow,
 } from "./moderation";
-import type { AccountRole, AccountState, AdminServices, AppEnv, AuthServices } from "./types";
+import type { AccountRole, AccountState, AdminServices, AppEnv, AuthServices, Services } from "./types";
 
 const MAX_SUSPENSION_MS = 180 * 86_400_000;
 const MAX_QUOTA_OVERRIDE_MS = 30 * 86_400_000;
@@ -118,6 +120,7 @@ export async function handleAdminRoute(
   services: AdminServices = productionAdminServices,
   authServices?: AuthServices,
   ctx?: ExecutionContext,
+  inferenceServices: Services = productionServices,
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const adminPath = url.pathname === "/admin" || url.pathname.startsWith("/admin/");
@@ -181,6 +184,9 @@ export async function handleAdminRoute(
     return logoutAdmin(env, requestId, admin);
   }
   if (!["GET", "HEAD"].includes(request.method)) await requireAdminMutation(request, env, admin);
+
+  const aiResponse = await handleAdminAiRoute(request, env, requestId, admin.userId, inferenceServices);
+  if (aiResponse) return aiResponse;
 
   if (request.method === "GET" && apiPath === "/session") {
     return noStoreJson({

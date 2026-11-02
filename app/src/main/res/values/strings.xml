@@ -3,4 +3,7 @@
     <string name="ime_subtype_en">English (India)</string>
     <string name="recording_channel_name">Voice recording</string>
     <string name="recording_notification">WoVoice is listening</string>
+    <string name="bubble_service_name">WoVoice dictation bubble</string>
+    <string name="bubble_accessibility_summary">Speak without switching your keyboard</string>
+    <string name="bubble_accessibility_description">WoVoice uses Accessibility to find the focused text box and insert the words you dictate. The text already in that box is read locally to preserve it and is never sent to WoVoice. Recording starts only when you tap the bubble. Password and PIN fields are blocked. Turn the bubble off at any time in WoVoice Settings.</string>
 </resources>

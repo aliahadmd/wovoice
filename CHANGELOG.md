@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.7.0 — 2026-11-02
+
+### Web admin
+
+- Added an AI workspace for speech recognition, cleanup models, system and user prompts, spoken-command instructions, vocabulary hints, and service availability.
+- Changes stay in a draft until an administrator reviews and publishes them. Revision history supports restoring earlier settings as a new draft, with change notes and audit records.
+- Prompt tests show the candidate, validated output, rendered messages, latency, and estimated cost. Tests use the service budget without creating dictation History. Invalid templates and conflicting edits are rejected.
+- Recordings use one published configuration throughout processing. Quota reservations and usage estimates follow the selected models; oversized cleanup inputs retain the recognition text.
+
+### Android
+
+- Improved rich-text dictation with Android 13+ selection-based insertion, preserving surrounding HTML and formatting. Older native editors preserve exposed text spans; unsupported HTML editors offer the keyboard picker instead of flattening the document.
+- Added a live Accessibility connection status, Reconnect action, and background setup guidance for Autostart, unrestricted battery use, and Recents protection. The bubble refreshes after unlocking and input-session changes. Dictation confirmation handles editors restarting input and HTML non-breaking spaces.
+- Added a movable dictation bubble for speaking while using Gboard or another keyboard. Enable it in Settings and allow Accessibility access, then select a text box and tap the bubble to start and finish.
+- Bubble dictation preserves existing text and the selection, blocks password and PIN fields, and cancels when you change fields, edit the text, switch apps, or lock the phone. Successful insertions use the same History, Dictionary, quota, and sync as the WoVoice keyboard.
+- The bubble has a compact microphone, a smooth five-bar live waveform, elapsed recording time, and a short transition into Thinking. It follows haptic, animation, and waveform preferences and remains draggable during transcription.
+- Temporary upload failures offer Retry for up to one minute, with at most two retries. Recordings are deleted on completion, cancellation, expiry, or changing the target or account. Permission and sign-in errors provide a direct Open app action.
+- Fields’ declared character limits are checked before insertion to avoid truncating existing text. Turning the screen off explicitly cancels dictation, and frequent screen updates no longer postpone the bubble indefinitely.
+- Dictation now prefers the regular microphone input, avoiding a low-gain voice-recognition path observed on Xiaomi devices that could incorrectly report clear speech as silence.
+
 ## 1.6.0 — 2026-09-26 (Desktop 1.1.0)
 
 ### Cloud sync replaces the recovery-key vault

@@ -1,4 +1,5 @@
 import { ApiError } from "./errors";
+import { cleanupReservation, type AiConfiguration } from "./ai-config";
 import { safeFailure } from "./moderation";
 import {
   NOVA_NEURONS_PER_MINUTE,
@@ -21,11 +22,12 @@ export async function reserveQuota(
   userId: string,
   requestId: string,
   audioSeconds: number,
+  config?: AiConfiguration,
 ): Promise<QuotaReservation> {
   const now = Date.now();
   const dateKey = new Date(now).toISOString().slice(0, 10);
-  const asrRate = env.ASR_MODEL === "nova-3" ? NOVA_NEURONS_PER_MINUTE : WHISPER_NEURONS_PER_MINUTE;
-  const reservedNeurons = audioSeconds / 60 * asrRate + POLISH_RESERVE_NEURONS;
+  const asrRate = (config?.asr.model ?? env.ASR_MODEL) === "nova-3" ? NOVA_NEURONS_PER_MINUTE : WHISPER_NEURONS_PER_MINUTE;
+  const reservedNeurons = audioSeconds / 60 * asrRate + (config ? cleanupReservation(config) : POLISH_RESERVE_NEURONS);
   try {
     await env.DB.batch([
       env.DB.prepare(

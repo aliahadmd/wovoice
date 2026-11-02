@@ -1,7 +1,17 @@
 name: Publish Android release
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Release platform
+        type: choice
+        required: true
+        default: android
+        options:
+          - android
+          - desktop
+          - all
 
 permissions:
   contents: write
@@ -12,7 +22,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (inputs.platform == 'android' || inputs.platform == 'all')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -100,17 +110,26 @@ jobs:
             echo "Release v$RELEASE_VERSION already exists." >&2
             exit 1
           fi
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          text = Path("CHANGELOG.md").read_text()
+          heading = f"## {os.environ['RELEASE_VERSION']} — "
+          section = next(part for part in text.split("\n## ") if part.startswith(heading[3:]))
+          notes = section.split("\n", 1)[1].strip()
+          Path("release/notes.md").write_text(notes + "\n")
+          PY
           gh release create "v$RELEASE_VERSION" \
             "release/WoVoice-$RELEASE_VERSION.apk" \
             "release/WoVoice-$RELEASE_VERSION.apk.sha256" \
             --target "$GITHUB_SHA" \
             --title "WoVoice $RELEASE_VERSION" \
-            --notes "WoVoice $RELEASE_VERSION release. See the repository README and CHANGELOG for what is new in this version."
+            --notes-file release/notes.md
 
   # Builds and publishes the macOS DMG the README documents as a download —
   # desktop keeps its own desktop-vX.Y.Z release line.
   release-desktop:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (inputs.platform == 'desktop' || inputs.platform == 'all')
     runs-on: macos-latest
     timeout-minutes: 45
     steps:

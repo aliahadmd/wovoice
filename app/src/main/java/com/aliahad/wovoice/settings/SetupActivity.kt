@@ -15,6 +15,8 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.text.Editable
 import android.text.InputType
@@ -45,6 +47,7 @@ import com.aliahad.wovoice.account.AccountResult
 import com.aliahad.wovoice.account.AccountState
 import com.aliahad.wovoice.account.DeviceSession
 import com.aliahad.wovoice.account.SessionManager
+import com.aliahad.wovoice.bubble.BubbleAccessibilityService
 import com.aliahad.wovoice.dashboard.DictionaryAdapter
 import com.aliahad.wovoice.dashboard.HistoryAdapter
 import com.aliahad.wovoice.dashboard.HistoryRow
@@ -132,11 +135,41 @@ class SetupActivity : AppCompatActivity() {
     private var retentionAction: View? = null
     private var syncing = false
     private var notificationPermissionRequested = false
+    private var bubbleStatus: TextView? = null
+    private var bubbleSwitch: SwitchMaterial? = null
+    private var pendingBubbleSetup = false
+    private val bubbleHealthHandler = Handler(Looper.getMainLooper())
+    private var lastBubbleConnected = false
+    private val bubbleHealthRefresh = object : Runnable {
+        override fun run() {
+            updateBubbleStatus()
+            val connected = BubbleAccessibilityService.isConnected()
+            if (connected != lastBubbleConnected && activeTab == TAB_HOME) refreshHome()
+            lastBubbleConnected = connected
+            bubbleHealthHandler.postDelayed(this, 2_000)
+        }
+    }
 
-    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         updateSetupStatus()
         refreshHome()
-        maybeRequestNotificationPermission()
+        if (granted) {
+            if (pendingBubbleSetup) {
+                pendingBubbleSetup = false
+                openBubbleAccessibilitySettings()
+            } else maybeRequestNotificationPermission()
+        } else {
+            if (pendingBubbleSetup) { pendingBubbleSetup = false; store.floatingBubbleEnabled = false; updateBubbleStatus() }
+            if (!shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)) {
+                MaterialAlertDialogBuilder(this)
+                    .setTitle("Microphone access")
+                    .setMessage("Allow the microphone in Android’s app settings to use voice dictation.")
+                    .setNegativeButton("Not now", null)
+                    .setPositiveButton("Open settings") { _, _ ->
+                        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                    }.show()
+            }
+        }
     }
 
     private val notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -166,12 +199,19 @@ class SetupActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateSetupStatus()
+        BubbleAccessibilityService.refreshConnection()
+        bubbleHealthHandler.post(bubbleHealthRefresh)
         if (account.signedIn) refreshAccount()
         when (activeTab) {
             TAB_HOME -> refreshHome()
             TAB_HISTORY -> refreshHistory()
             TAB_DICTIONARY -> refreshDictionary()
         }
+    }
+
+    override fun onPause() {
+        bubbleHealthHandler.removeCallbacks(bubbleHealthRefresh)
+        super.onPause()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -380,7 +420,9 @@ class SetupActivity : AppCompatActivity() {
         }
         readinessText.text = listOf(
             statusLine(mic, "Microphone ready", "Microphone permission needed"),
-            statusLine(selected, "WoVoice selected", if (enabled) "Choose WoVoice as keyboard" else "Keyboard not enabled"),
+            statusLine(selected || (store.floatingBubbleEnabled && BubbleAccessibilityService.isEnabled(this) && BubbleAccessibilityService.isConnected()),
+                if (selected) "WoVoice selected" else "Bubble ready — keep your current keyboard",
+                if (enabled) "Choose WoVoice or enable the dictation bubble" else "Enable the keyboard or dictation bubble"),
             statusLine(online, "Network available", "Network unavailable — manual keyboard still works"),
             statusLine(connected, "Account verified", accountUnavailable),
         ).joinToString("\n")
@@ -532,11 +574,33 @@ class SetupActivity : AppCompatActivity() {
         microphoneStatus = statusText()
         keyboardStatus = statusText()
         body.addView(settingsCard("SETUP", listOf(
-            settingBlock("Microphone", microphoneStatus!!, "Allow") { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+            settingBlock("Microphone", microphoneStatus!!, "Allow") { requestMicrophone() },
             settingBlock("Keyboard access", keyboardStatus!!, "Enable") { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) },
             settingAction("Choose active keyboard", "Open Android’s keyboard picker", "Choose") {
                 (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker()
             },
+        )))
+
+        bubbleStatus = statusText()
+        bubbleSwitch = settingSwitch(
+            "Speak without switching keyboard",
+            "Show a movable dictation bubble beside the text box you select",
+            store.floatingBubbleEnabled,
+        ) { enabled ->
+            if (enabled) enableBubble() else { store.floatingBubbleEnabled = false; updateBubbleStatus() }
+        }
+        body.addView(settingsCard("DICTATION BUBBLE", listOf(
+            bubbleSwitch!!,
+            bubbleStatus!!,
+            TextView(this).apply {
+                text = "Keep Gboard or any other keyboard. Tap the bubble to speak, then tap again to insert. Drag it to move it. Password fields are blocked; changing text boxes cancels the recording."
+                styleText(13f, MUTED)
+                setLineSpacing(dp(2).toFloat(), 1.12f)
+            },
+            settingAction("Accessibility connection", "If disconnected, turn WoVoice off and on once in Accessibility", "Reconnect") {
+                if (store.floatingBubbleEnabled) openBubbleAccessibilitySettings() else enableBubble()
+            },
+            settingAction("Keep the bubble available", "Allow background activity so your phone does not stop WoVoice", "Configure", ::showBubbleBackgroundHelp),
         )))
 
         accountStatus = statusText()
@@ -623,7 +687,7 @@ class SetupActivity : AppCompatActivity() {
 
         body.addView(settingsCard("PRIVACY & DATA", listOf(
             TextView(this).apply {
-                text = "Audio, raw ASR, correction context, and source-app identity are never retained. Synced history, approved dictionary entries, and analytics are end-to-end encrypted before leaving this phone."
+                text = "Recordings are temporary and deleted after dictation. A failed bubble upload may stay on this phone for up to a minute for Retry, and is removed on cancel or a text-box change. Raw ASR, correction context, and source-app identity are never retained. Synced history, approved dictionary entries, and analytics are encrypted for storage by WoVoice."
                 styleText(14f, MUTED)
                 setLineSpacing(dp(3).toFloat(), 1.15f)
                 setPadding(0, dp(4), 0, dp(10))
@@ -640,8 +704,9 @@ class SetupActivity : AppCompatActivity() {
     }
 
     private fun updateSetupStatus() {
+        updateBubbleStatus()
         val micGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-        if (micGranted) maybeRequestNotificationPermission()
+        if (micGranted && !pendingBubbleSetup) maybeRequestNotificationPermission()
         microphoneStatus?.text = if (micGranted) "✓ Allowed and ready" else "Permission required for speech input"
         microphoneStatus?.setTextColor(if (micGranted) SUCCESS else MUTED)
         val manager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
@@ -689,6 +754,76 @@ class SetupActivity : AppCompatActivity() {
         updateCloudSyncStatus()
         accountSignOutAction?.visibility = if (signedIn) View.VISIBLE else View.GONE
         accountDeleteAction?.visibility = if (signedIn) View.VISIBLE else View.GONE
+    }
+
+    private fun updateBubbleStatus() {
+        if (!::store.isInitialized) return
+        bubbleSwitch?.let { switch ->
+            switch.setOnCheckedChangeListener(null)
+            switch.isChecked = store.floatingBubbleEnabled
+            switch.setOnCheckedChangeListener { _, enabled ->
+                if (enabled) enableBubble() else { store.floatingBubbleEnabled = false; updateBubbleStatus() }
+            }
+        }
+        bubbleStatus?.text = when {
+            !store.floatingBubbleEnabled -> "Bubble is off"
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED -> "Microphone permission needed"
+            !BubbleAccessibilityService.isEnabled(this) -> "Accessibility access is off — tap Reconnect"
+            !BubbleAccessibilityService.isConnected() -> "Accessibility disconnected — tap Reconnect"
+            !account.signedIn -> "Accessibility ready — sign in below to dictate"
+            else -> "Ready — select a text box while using another keyboard"
+        }
+    }
+
+    private fun showBubbleBackgroundHelp() {
+        val xiaomi = Build.MANUFACTURER.lowercase(Locale.ROOT) in setOf("xiaomi", "redmi", "poco")
+        val steps = if (xiaomi) {
+            "In WoVoice’s App info:\n\n1. Enable Autostart.\n2. Open Power and choose No restrictions.\n3. In Recents, hold the WoVoice card and tap its lock icon to protect it from Clear all.\n\nSome Xiaomi versions force-stop an app when you swipe its card away, which can also turn Accessibility off. Use Home or Back to close the screen."
+        } else {
+            "In WoVoice’s App info, open Battery or App battery usage and allow background activity (Unrestricted, if available). Your phone may also have an Autostart setting.\n\nUse Home or Back to close the screen while keeping dictation available."
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Keep the bubble available")
+            .setMessage("Android keeps the Accessibility connection in the background. The microphone runs only when you start dictation.\n\n$steps\n\nAfter Force stop or turning Accessibility off, reopen WoVoice and tap Reconnect. Android requires you to enable that access yourself.")
+            .setNegativeButton("Done", null)
+            .setPositiveButton("App settings") { _, _ ->
+                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            }.show()
+    }
+
+    private fun enableBubble() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Speak without switching keyboard")
+            .setMessage("WoVoice needs Accessibility access to find and edit the text box you select. Text already in the box is read only on this phone to preserve it; it is never sent to WoVoice. Only your recording and approved Dictionary terms are sent for transcription.\n\nRecording starts when you tap the bubble. Failed uploads may stay on this phone for up to a minute for Retry. Password and PIN fields are blocked. You can turn this off here at any time.")
+            .setNegativeButton("Not now") { _, _ -> updateBubbleStatus() }
+            .setOnCancelListener { updateBubbleStatus() }
+            .setPositiveButton("Continue") { _, _ ->
+                store.floatingBubbleEnabled = true
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    openBubbleAccessibilitySettings()
+                } else {
+                    pendingBubbleSetup = true
+                    requestMicrophone()
+                }
+                updateBubbleStatus()
+            }.show()
+    }
+
+    private fun requestMicrophone() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) return
+        if (shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("Allow microphone access")
+                .setMessage("WoVoice records only while you ask it to listen. Recordings are deleted after dictation; a failed bubble upload can stay on this phone for up to a minute so you can retry.")
+                .setNegativeButton("Not now") { _, _ -> pendingBubbleSetup = false; updateBubbleStatus() }
+                .setPositiveButton("Continue") { _, _ -> permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }.show()
+        } else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    private fun openBubbleAccessibilitySettings() {
+        // The service-details action requires a system permission on newer Android versions.
+        // The public Accessibility settings screen works across Android and vendor builds.
+        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
 
     private fun startAccountLogin(intent: String = SessionManager.AUTH_LOGIN) {

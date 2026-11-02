@@ -1,13 +1,11 @@
 import { ApiError, errorResponse } from "./errors";
+import { assertPolishInputFits, cleanupPricing, type CleanupModel } from "./ai-config";
+import { readActiveAiConfiguration } from "./ai-config-store";
 import { handleAdminRoute, productionAdminServices } from "./admin";
 import { authenticateAccess, handleAccountRoute, handleAuthRoute, productionAuthServices } from "./auth";
 import {
   NOVA_NEURONS_PER_MINUTE,
   NOVA_USD_PER_MINUTE,
-  POLISH_INPUT_NEURONS_PER_MILLION,
-  POLISH_INPUT_USD_PER_MILLION,
-  POLISH_OUTPUT_NEURONS_PER_MILLION,
-  POLISH_OUTPUT_USD_PER_MILLION,
   PRICING_VERSION,
   WHISPER_NEURONS_PER_MINUTE,
   WHISPER_USD_PER_MINUTE,
@@ -23,7 +21,6 @@ import type { AdminServices, AppEnv, AuthServices, Principal, Services } from ".
 import { chooseSafePolish } from "./validation";
 import { readBodyLimited, validateWav } from "./wav";
 
-const INFERENCE_TIMEOUT_MS = 25_000;
 const LEGACY_RELEASE_CERT_SHA256 =
   "3A:E4:93:35:28:83:E2:7F:98:ED:93:60:A4:C2:95:6B:66:2C:24:1C:74:FC:2B:B8:5C:5A:C1:6F:3F:2F:D1:D4";
 const RELEASE_V2_CERT_SHA256 =
@@ -89,9 +86,10 @@ export function createHandler(
     let audioSeconds = 0;
     let estimatedCostUsd = 0;
     let outcomeCode: string | null = null;
+    let aiRevisionId: string | null = null;
 
     try {
-      const adminResponse = await handleAdminRoute(request, env, requestId, adminServices, authServices, ctx);
+      const adminResponse = await handleAdminRoute(request, env, requestId, adminServices, authServices, ctx, services);
       if (adminResponse) {
         status = adminResponse.status;
         return adminResponse;
@@ -137,6 +135,11 @@ export function createHandler(
       if (!rate.success) {
         throw new ApiError(429, "RATE_LIMITED", true, "Too many recordings. Please wait a moment.", 60);
       }
+      const runtime = await readActiveAiConfiguration(env);
+      const config = runtime.config;
+      aiRevisionId = runtime.revisionId;
+      selectedModel = config.asr.model === "nova-3" ? "nova-3" : "whisper-large-v3-turbo";
+      if (!config.service.enabled) throw new ApiError(503, "SERVICE_UNAVAILABLE", true, config.service.maintenanceMessage, 60);
       const contentType = request.headers.get("content-type") ?? "";
       if (!contentType.toLowerCase().startsWith("multipart/form-data;")) {
         throw new ApiError(400, "INVALID_REQUEST", false, "A multipart recording is required.");
@@ -158,22 +161,24 @@ export function createHandler(
       audioBytes = audio.byteLength;
       const wav = validateWav(audio);
       audioSeconds = wav.durationSeconds;
-      reservation = await reserveQuota(env, principal.userId, requestId, wav.durationSeconds);
+      reservation = await reserveQuota(env, principal.userId, requestId, wav.durationSeconds, config);
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort("inference timeout"), INFERENCE_TIMEOUT_MS);
+      const timeout = setTimeout(() => controller.abort("inference timeout"), config.service.timeoutMs);
       try {
         const asrStartedAt = performance.now();
-        const result = await services.transcribe(env, audio, options, controller.signal);
+        const result = await services.transcribe(env, audio, options, controller.signal, config);
         asrMs = Math.round(performance.now() - asrStartedAt);
         selectedModel = result.model;
 
         let finalText = result.text.trim();
         let polished = false;
-        let polishTokens: { input: number; output: number } | null = null;
+        let polishTokens: { input: number; output: number } | null = { input: 0, output: 0 };
         const polishStartedAt = performance.now();
-        try {
-          const candidate = await services.polish(env, finalText, options, controller.signal);
+        if (config.cleanup.enabled) try {
+          assertPolishInputFits(config, finalText, options);
+          polishTokens = null; // An attempted call without token usage must retain a conservative charge.
+          const candidate = await services.polish(env, finalText, options, controller.signal, config);
           if (candidate.inputTokens !== null && candidate.outputTokens !== null) {
             polishTokens = { input: candidate.inputTokens, output: candidate.outputTokens };
           }
@@ -187,7 +192,7 @@ export function createHandler(
           // A cleanup failure is intentionally non-fatal; the ASR text is safer.
         }
         polishMs = Math.round(performance.now() - polishStartedAt);
-        const usage = buildUsage(selectedModel, wav.durationSeconds, polishTokens);
+        const usage = buildUsage(selectedModel, wav.durationSeconds, polishTokens, config.cleanup.model);
         totalNeurons = usage?.totalNeurons ?? null;
         estimatedCostUsd = usage?.estimatedCostUsd ?? 0;
         if (principal) {
@@ -205,6 +210,7 @@ export function createHandler(
             rawText: result.text.trim(),
             polished,
             asrModel: selectedModel,
+            configurationRevision: aiRevisionId,
             timingsMs: {
               asr: asrMs,
               polish: polishMs,
@@ -267,6 +273,7 @@ export function createHandler(
           subjectId: principal?.userId ?? null,
           audioBytes,
           asrModel: selectedModel,
+          aiRevisionId,
           timingsMs: {
             asr: asrMs,
             polish: polishMs,
@@ -312,19 +319,21 @@ export function buildUsage(
   model: "whisper-large-v3-turbo" | "nova-3",
   audioSeconds: number,
   polishTokens: { input: number; output: number } | null,
+  cleanupModel: CleanupModel = "gpt-oss-20b",
 ): UsageEstimate | null {
   if (!polishTokens) return null;
   const minutes = audioSeconds / 60;
   const nova = model === "nova-3";
+  const cleanupRate = cleanupPricing(cleanupModel);
   const asrNeurons = minutes * (nova ? NOVA_NEURONS_PER_MINUTE : WHISPER_NEURONS_PER_MINUTE);
   const asrCost = minutes * (nova ? NOVA_USD_PER_MINUTE : WHISPER_USD_PER_MINUTE);
   const polishNeurons =
-    (polishTokens.input * POLISH_INPUT_NEURONS_PER_MILLION +
-      polishTokens.output * POLISH_OUTPUT_NEURONS_PER_MILLION) /
+    (polishTokens.input * cleanupRate.inputNeuronsPerMillion +
+      polishTokens.output * cleanupRate.outputNeuronsPerMillion) /
     1_000_000;
   const polishCost =
-    (polishTokens.input * POLISH_INPUT_USD_PER_MILLION +
-      polishTokens.output * POLISH_OUTPUT_USD_PER_MILLION) /
+    (polishTokens.input * cleanupRate.inputUsdPerMillion +
+      polishTokens.output * cleanupRate.outputUsdPerMillion) /
     1_000_000;
   return {
     estimated: true,

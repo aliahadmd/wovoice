@@ -1,5 +1,7 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { AdminApiError, adminApi, safeReturnTo, signInRedirect } from "./api";
+import { AiSettings } from "./AiSettings";
+import { Dialog } from "./Dialog";
 
 declare global {
   interface Window {
@@ -11,7 +13,7 @@ declare global {
   }
 }
 
-type View = "overview" | "users" | "detail" | "audit";
+type View = "overview" | "users" | "detail" | "audit" | "ai";
 type AccountState = "active" | "suspended" | "banned";
 
 interface AdminSession {
@@ -101,6 +103,7 @@ function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("Loading secure sign-in…");
   const [error, setError] = useState("");
+
   const widget = useRef<HTMLDivElement>(null);
   const widgetId = useRef<string | null>(null);
   const returnTo = safeReturnTo(new URLSearchParams(location.search).get("returnTo"));
@@ -223,10 +226,21 @@ function AdminPortal() {
   const [view, setView] = useState<View>(route.view);
   const [selectedUser, setSelectedUser] = useState<string | null>(route.userId);
   const [error, setError] = useState("");
+  const [pendingNavigation, setPendingNavigation] = useState<{ view: View; userId?: string; path: string; replace?: boolean } | null>(null);
+  const aiDirty = useRef(false);
+  const lastPath = useRef(`${location.pathname}${location.search}`);
+  const onAiDirtyChange = useCallback((dirty: boolean) => { aiDirty.current = dirty; }, []);
 
   useEffect(() => {
     const restoreRoute = () => {
       const restored = currentRoute();
+      const targetPath = `${location.pathname}${location.search}`;
+      if (aiDirty.current) {
+        history.pushState({}, "", lastPath.current);
+        setPendingNavigation({ view: restored.view, userId: restored.userId ?? undefined, path: targetPath, replace: true });
+        return;
+      }
+      lastPath.current = targetPath;
       setView(restored.view);
       setSelectedUser(restored.userId);
       setError("");
@@ -245,8 +259,14 @@ function AdminPortal() {
   useEffect(() => { void loadSession(); }, [loadSession]);
 
   function navigate(next: View, userId?: string) {
-    const path = next === "overview" ? "/admin/" : next === "users" ? "/admin/users" : next === "audit" ? "/admin/audit" : `/admin/users/${encodeURIComponent(userId ?? "")}`;
-    history.pushState({}, "", path);
+    const path = next === "overview" ? "/admin/" : next === "users" ? "/admin/users" : next === "audit" ? "/admin/audit" : next === "ai" ? "/admin/ai" : `/admin/users/${encodeURIComponent(userId ?? "")}`;
+    if (path === lastPath.current) return;
+    if (aiDirty.current) { setPendingNavigation({ view: next, userId, path }); return; }
+    move(next, userId, path);
+  }
+  function move(next: View, userId: string | undefined, path: string, replace = false) {
+    if (replace) history.replaceState({}, "", path); else history.pushState({}, "", path);
+    lastPath.current = path;
     setView(next); setSelectedUser(userId ?? null); setError("");
   }
 
@@ -263,6 +283,7 @@ function AdminPortal() {
     users: ["ACCOUNT MANAGEMENT", "Users"],
     detail: ["ACCOUNT DETAIL", "User"],
     audit: ["ACCOUNTABILITY", "Audit log"],
+    ai: ["DICTATION INTELLIGENCE", "AI workspace"],
   };
   return (
     <div className="shell">
@@ -272,19 +293,22 @@ function AdminPortal() {
         <nav className="nav" aria-label="Admin sections">
           <NavButton active={view === "overview"} onClick={() => navigate("overview")} icon="⌁">Overview</NavButton>
           <NavButton active={view === "users" || view === "detail"} onClick={() => navigate("users")} icon="◎">Users</NavButton>
+          <NavButton active={view === "ai"} onClick={() => navigate("ai")} icon="✦">AI workspace</NavButton>
           <NavButton active={view === "audit"} onClick={() => navigate("audit")} icon="✓">Audit log</NavButton>
         </nav>
         <div className="identity"><span className="status-dot" /><div><strong>{session.admin.email}</strong><small>Email-verified session</small></div></div>
         <button className="logout-button" type="button" onClick={() => void logout()}>Sign out</button>
       </aside>
       <main className="main">
-        <header className="topbar"><div><p className="eyebrow">{titles[view][0]}</p><h1>{titles[view][1]}</h1></div><span className="privacy-chip">Operational metadata only</span></header>
+        <header className="topbar"><div><p className="eyebrow">{titles[view][0]}</p><h1>{titles[view][1]}</h1></div><span className="privacy-chip">{view === "ai" ? "Draft → test → publish" : "Operational metadata only"}</span></header>
         {error && <Banner>{error}</Banner>}
         {view === "overview" && <Overview onError={setError} />}
         {view === "users" && <Users onOpen={(id) => navigate("detail", id)} onError={setError} />}
         {view === "detail" && selectedUser && <UserDetailView userId={selectedUser} onBack={() => navigate("users")} onError={setError} />}
         {view === "audit" && <Audit onError={setError} />}
+        {view === "ai" && <AiSettings onDirtyChange={onAiDirtyChange} />}
       </main>
+      {pendingNavigation && <Dialog title="Leave unsaved AI settings?" onClose={() => setPendingNavigation(null)}><p className="muted">Your unsaved edits will be discarded. Saved drafts and live settings are unchanged.</p><div className="modal-actions"><button className="secondary-button" onClick={() => setPendingNavigation(null)}>Keep editing</button><button className="danger-button" onClick={() => { const next = pendingNavigation; aiDirty.current = false; setPendingNavigation(null); move(next.view, next.userId, next.path, next.replace); }}>Discard edits</button></div></Dialog>}
     </div>
   );
 }
@@ -410,7 +434,7 @@ function Audit({ onError }: { onError(message: string): void }) {
     catch (reason) { onError(errorMessage(reason)); } finally { setBusy(false); }
   }, [action, cursor, onError]);
   useEffect(() => { void load(false); }, [action]);
-  return <Panel title="Administrative actions" kicker="ACCOUNTABILITY"><select className="audit-filter" value={action} onChange={(event) => setAction(event.target.value)}><option value="">All actions</option><option value="admin_login">Admin sign-ins</option><option value="admin_logout">Admin sign-outs</option><option value="user_suspended">Suspensions</option><option value="user_banned">Bans</option><option value="user_restored">Restorations</option><option value="sessions_revoked">Session revocations</option><option value="quota_override_set">Quota grants</option><option value="quota_override_cleared">Cleared grants</option></select>
+  return <Panel title="Administrative actions" kicker="ACCOUNTABILITY"><select className="audit-filter" value={action} onChange={(event) => setAction(event.target.value)}><option value="">All actions</option><option value="admin_login">Admin sign-ins</option><option value="admin_logout">Admin sign-outs</option><option value="user_suspended">Suspensions</option><option value="user_banned">Bans</option><option value="user_restored">Restorations</option><option value="sessions_revoked">Session revocations</option><option value="quota_override_set">Quota grants</option><option value="quota_override_cleared">Cleared grants</option><option value="ai_configuration_draft_saved">AI drafts</option><option value="ai_configuration_published">AI publications</option></select>
     {events.length ? <Timeline items={events.map((item) => ({ id: item.id, title: humanize(item.action), detail: `${item.internalReason} · Target: ${item.targetUserId ?? "—"} · Request: ${item.requestId}`, time: item.createdAt }))} /> : !busy && <Empty>No administrative actions in this view.</Empty>}
     {cursor && <button className="secondary-button load-more" onClick={() => void load(true)}>Load more events</button>}
   </Panel>;
@@ -433,6 +457,7 @@ function currentRoute(): { view: View; userId: string | null } {
   if (detail) return { view: "detail", userId: decodeURIComponent(detail[1]) };
   if (location.pathname.startsWith("/admin/users")) return { view: "users", userId: null };
   if (location.pathname.startsWith("/admin/audit")) return { view: "audit", userId: null };
+  if (location.pathname === "/admin/ai" || location.pathname === "/admin/ai/") return { view: "ai", userId: null };
   return { view: "overview", userId: null };
 }
 function errorMessage(value: unknown): string { return value instanceof Error ? value.message : "Something went wrong. Try again."; }

@@ -68,6 +68,28 @@ class SettingsStore(context: Context) : AccountSettings {
         get() = preferences.getBoolean(KEY_WAVEFORM, true)
         set(value) = preferences.edit().putBoolean(KEY_WAVEFORM, value).apply()
 
+    var floatingBubbleEnabled: Boolean
+        get() = preferences.getBoolean(KEY_FLOATING_BUBBLE, false)
+        set(value) = preferences.edit().putBoolean(KEY_FLOATING_BUBBLE, value).apply()
+
+    var bubblePositionX: Float
+        get() = preferences.getFloat(KEY_BUBBLE_X, 0.95f).coerceIn(0f, 1f)
+        set(value) = preferences.edit().putFloat(KEY_BUBBLE_X, value.coerceIn(0f, 1f)).apply()
+
+    var bubblePositionY: Float
+        get() = preferences.getFloat(KEY_BUBBLE_Y, 0.38f).coerceIn(0f, 1f)
+        set(value) = preferences.edit().putFloat(KEY_BUBBLE_Y, value.coerceIn(0f, 1f)).apply()
+
+    fun observeFloatingBubble(onChanged: () -> Unit): () -> Unit {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            when (key) {
+                KEY_FLOATING_BUBBLE, KEY_HAPTICS, KEY_ANIMATIONS, KEY_WAVEFORM, KEY_ACCOUNT_ID, null -> onChanged()
+            }
+        }
+        preferences.registerOnSharedPreferenceChangeListener(listener)
+        return { preferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
     override var accountId: String?
         get() = preferences.getString(KEY_ACCOUNT_ID, null)
         set(value) {
@@ -182,6 +204,9 @@ class SettingsStore(context: Context) : AccountSettings {
         const val KEY_HAPTICS = "haptics_enabled"
         const val KEY_ANIMATIONS = "animations_enabled"
         const val KEY_WAVEFORM = "waveform_enabled"
+        const val KEY_FLOATING_BUBBLE = "floating_bubble_enabled"
+        const val KEY_BUBBLE_X = "bubble_position_x"
+        const val KEY_BUBBLE_Y = "bubble_position_y"
         const val KEY_ACCOUNT_ID = "account_id"
         const val KEY_ACCOUNT_EMAIL = "account_email"
         const val KEY_ACCOUNT_ROLE = "account_role"

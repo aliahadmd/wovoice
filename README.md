@@ -150,6 +150,29 @@ Some examples:
 
 **Passwords and PINs are protected.** In password fields WoVoice switches to the regular keyboard and turns the microphone off, so secrets are never spoken or sent anywhere.
 
+### Speak while using another keyboard
+
+Keep Gboard or your preferred keyboard selected:
+
+1. Open **WoVoice → Settings → Dictation bubble** and turn on **Speak without switching keyboard**.
+2. Allow the microphone and enable **WoVoice dictation bubble** in Android Accessibility settings.
+3. Sign in to WoVoice, then select a text box in an app. A small bubble appears above your keyboard.
+4. Tap the microphone bubble, speak, then tap again to finish. WoVoice inserts at the original cursor or replaces the selected text.
+
+Drag the bubble to move it. **×** cancels an active dictation; when idle, **×** hides the bubble until you enable it again in Settings. The bubble stays hidden in password fields and while the WoVoice keyboard is selected. Changing fields, editing text, switching apps, or locking the phone cancels a pending dictation.
+
+If Android shows Accessibility enabled but the bubble is unavailable after an app restart or update, turn **WoVoice dictation bubble** off and on once in Android Accessibility settings.
+
+**Keep the bubble available in the background.** Open **Settings → Dictation bubble → Keep the bubble available → Configure**. On Xiaomi, Redmi, and POCO phones, enable **Autostart** in WoVoice’s App info and choose **Power → No restrictions**. Lock the WoVoice card in Recents to protect it from **Clear all**. Some phone versions treat swiping away an app as a force-stop and can remove its Accessibility access. Use Home or Back to close its screen. If access is removed, reopen WoVoice and tap **Reconnect**. The status distinguishes a connected service from access that is enabled but disconnected.
+
+On Android 13 and newer, the bubble uses Android’s Accessibility input connection to insert into the selection, preserving the editor’s surrounding rich text and HTML. Native editors on older versions retain the formatting exposed through Accessibility. HTML editors without a usable input connection offer **Choose keyboard** instead of replacing their whole document. If an editor does not confirm a submitted edit, the bubble says **Sent to editor** and asks you to check the text; it never submits the same text through another method automatically.
+
+The bubble shows elapsed recording time and the one-minute limit, then expands into **Thinking** while transcribing. It follows your haptic, animation, and live-waveform preferences. You can still drag it while it is thinking.
+
+If an upload fails temporarily, tap **Retry** to send the same recording again without repeating yourself. Retry is available for up to one minute and allows at most two retries. The recording stays only in temporary storage on this phone and is deleted after completion, cancellation, a text-box or account change, or expiry. Other errors remain visible with an action such as **Open app** or **Speak again**.
+
+Accessibility reads the focused text box locally to preserve its existing text. That text is never sent to the transcription service. Apps that do not expose an editable text box to Accessibility may not support bubble insertion.
+
 ### The regular keyboard
 
 Tap **EN** or swipe sideways to type by hand. It works offline and has no account requirement.
@@ -344,6 +367,8 @@ WoVoice is run from a small admin console. To be open about it, here is exactly 
 </p>
 
 **The Audit log** records every administrator sign-in and every action taken on an account, so access to the console is itself accountable. Activity and audit entries are deleted after 90 days.
+
+**The AI workspace** lets administrators choose speech recognition and cleanup models, edit the prompts, test sample text, and pause dictation with a maintenance message. Changes are saved as drafts, then reviewed and published together. Earlier revisions can be restored as a new draft. Output checks and service budget limits remain enforced, and prompt-test samples are not saved to History or audit logs.
 
 What the console **never** shows: your voice recordings, the text you dictated, your Dictionary words, the contents of your History, or the apps you dictated into. For synced items it shows only how many there are and their total size.
 

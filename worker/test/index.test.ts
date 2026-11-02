@@ -7,9 +7,11 @@ import { cleanupModerationData, processModerationNotifications } from "../src/mo
 import { completeQuota, releaseExpiredReservations, releaseQuota, reserveQuota } from "../src/quota";
 import { applyHistoryRetention, purgeLegacyVaults } from "../src/records";
 import type { AdminServices, AppEnv, AuthServices, Services } from "../src/types";
-import { extractCleanedText } from "../src/models";
+import { extractCleanedText, productionServices } from "../src/models";
 import { chooseSafePolish } from "../src/validation";
 import { validateWav } from "../src/wav";
+import { cleanupReservation, defaultAiConfiguration, type AiConfiguration } from "../src/ai-config";
+import { readActiveAiConfiguration } from "../src/ai-config-store";
 
 declare global {
   namespace Cloudflare {
@@ -28,6 +30,8 @@ beforeEach(async () => {
   await env.DB.prepare("DELETE FROM login_challenges").run();
   await env.DB.prepare("DELETE FROM admin_browser_sessions").run();
   await env.DB.prepare("DELETE FROM admin_login_challenges").run();
+  await env.DB.prepare("UPDATE ai_config_state SET version = 0, active_revision_id = NULL, draft_revision_id = NULL WHERE id = 1").run();
+  await env.DB.prepare("DELETE FROM ai_config_revisions").run();
 });
 
 describe("WoVoice Worker", () => {
@@ -805,7 +809,7 @@ describe("WAV validation", () => {
 describe("usage estimates", () => {
   it("uses versioned Whisper and token pricing", () => {
     expect(buildUsage("whisper-large-v3-turbo", 60, { input: 1_000, output: 500 })).toMatchObject({
-      pricingVersion: "2026-07-08",
+      pricingVersion: "2026-11-02",
       asrNeurons: 46.63,
       inputTokens: 1_000,
       outputTokens: 500,
@@ -1118,3 +1122,199 @@ function makeWav(seconds: number): ArrayBuffer {
 function writeAscii(bytes: Uint8Array, offset: number, text: string): void {
   for (let index = 0; index < text.length; index += 1) bytes[offset + index] = text.charCodeAt(index);
 }
+
+describe("admin AI workspace", () => {
+  async function workspaceFixture(services = fakeServices()) {
+    await env.DB.prepare("UPDATE users SET status = 'active' WHERE role = 'admin'").run();
+    await env.DB.prepare("DELETE FROM quota_reservations WHERE user_id IN (SELECT id FROM users WHERE role = 'admin')").run();
+    await env.DB.prepare("DELETE FROM daily_usage WHERE user_id IN (SELECT id FROM users WHERE role = 'admin')").run();
+    const fixture = adminFixture(services);
+    const browser = await registerAndSignInAdmin(fixture);
+    const call = (path: string, body?: unknown) => fixture.handler(adminRequest(`/ai${path}`, browser, body === undefined ? "GET" : "POST", body), fixture.environment);
+    const save = (config: AiConfiguration, expectedVersion = 0) => call("/config/draft", { config, expectedVersion, reason: "Evaluate recognition and cleanup" });
+    const publish = (draft: { id: string }, expectedVersion: number) => call("/config/publish", { revisionId: draft.id, expectedVersion, reason: "Reviewed for live dictation" });
+    return { ...fixture, browser, call, save, publish, services };
+  }
+
+  it("requires browser admin authentication and CSRF for every new mutation", async () => {
+    const fixture = await workspaceFixture();
+    const anonymous = await fixture.handler(adminRequest("/ai/config", { cookie: "", csrf: "" }), fixture.environment);
+    expect(anonymous.status).toBe(401);
+    const bearerOnly = await fixture.handler(new Request("https://worker.test/admin/api/v1/ai/config", { headers: bearer(fixture.browser.android.accessToken) }), fixture.environment);
+    expect(bearerOnly.status).toBe(401);
+    for (const path of ["/ai/config/draft", "/ai/config/publish", "/ai/config/restore", "/ai/preview"]) {
+      const noCsrf = await fixture.handler(adminRequest(path, { ...fixture.browser, csrf: "" }, "POST", {}), fixture.environment);
+      expect(noCsrf.status).toBe(403);
+      const wrongOrigin = await fixture.handler(adminRequest(path, fixture.browser, "POST", {}, "https://attacker.test"), fixture.environment);
+      expect(wrongOrigin.status).toBe(403);
+    }
+    expect(fixture.services.polish).not.toHaveBeenCalled();
+  });
+
+  it("keeps drafts isolated, publishes immutable snapshots, and restores only as a draft", async () => {
+    const f = await workspaceFixture();
+    const config = defaultAiConfiguration(); config.asr.model = "nova-3"; config.cleanup.model = "gpt-oss-120b";
+    const savedResponse = await f.save(config);
+    expect(savedResponse.status).toBe(200);
+    expect(savedResponse.headers.get("cache-control")).toBe("no-store");
+    const saved = await savedResponse.json() as { version: number; draft: { id: string }; active: null; effective: AiConfiguration };
+    expect(saved).toMatchObject({ version: 1, active: null, effective: { asr: { model: "whisper" } } });
+    expect((await readActiveAiConfiguration(f.environment)).config.asr.model).toBe("whisper");
+    const liveResponse = await f.publish(saved.draft, 1);
+    expect(liveResponse.status).toBe(200);
+    const live = await liveResponse.json() as { active: { id: string }; draft: null; version: number };
+    expect(live).toMatchObject({ version: 2, draft: null });
+    expect(await readActiveAiConfiguration(f.environment)).toMatchObject({ revisionId: live.active.id, config });
+    await expect(env.DB.prepare("UPDATE ai_config_revisions SET reason = 'tamper' WHERE id = ?").bind(saved.draft.id).run()).rejects.toThrow("AI_CONFIG_REVISION_IMMUTABLE");
+    const restored = await f.call("/config/restore", { revisionId: "defaults", expectedVersion: 2, reason: "Compare original default configuration" });
+    expect(restored.status).toBe(200);
+    expect(await restored.json()).toMatchObject({ version: 3, active: { id: live.active.id }, draft: { config: { asr: { model: "whisper" } } }, effective: { asr: { model: "nova-3" } } });
+    const history = await f.call("/revisions");
+    expect(await history.json()).toMatchObject({ revisions: [{ version: 3, kind: "draft" }, { version: 2, kind: "published" }, { version: 1, kind: "draft" }] });
+    const audits = await env.DB.prepare("SELECT before_state, after_state FROM admin_audit_events WHERE action LIKE 'ai_configuration_%'").all();
+    expect(audits.results.length).toBeGreaterThanOrEqual(3);
+    expect(JSON.stringify(audits.results)).not.toContain(config.cleanup.systemPrompt);
+  });
+
+  it("rejects concurrent stale writes without orphan revisions or duplicate audit events", async () => {
+    const f = await workspaceFixture();
+    const config = defaultAiConfiguration();
+    const responses = await Promise.all([f.save(config), f.save(config)]);
+    expect(responses.map((r) => r.status).sort()).toEqual([200, 409]);
+    const rows = await env.DB.prepare("SELECT COUNT(*) AS count FROM ai_config_revisions").first<{ count: number }>();
+    expect(rows?.count).toBe(1);
+    const saved = await (await f.call("/config")).json() as { draft: { id: string } };
+    expect((await f.publish(saved.draft, 0)).status).toBe(409);
+    expect((await f.call("/config/publish", { revisionId: "missing", expectedVersion: 1, reason: "Cannot publish unknown revision" })).status).toBe(404);
+    expect((await readActiveAiConfiguration(f.environment)).revisionId).toBeNull();
+  });
+
+  it("rejects unsupported models, unsafe bounds, and broken placeholders on the server", async () => {
+    const f = await workspaceFixture();
+    const invalids = [
+      { ...defaultAiConfiguration(), providerUrl: "https://attacker.test" },
+      { ...defaultAiConfiguration(), cleanup: { ...defaultAiConfiguration().cleanup, model: "unknown-model" } },
+      { ...defaultAiConfiguration(), service: { ...defaultAiConfiguration().service, timeoutMs: 60_000 } },
+      { ...defaultAiConfiguration(), cleanup: { ...defaultAiConfiguration().cleanup, userPromptTemplate: "{{transcript}} {{secret}}" } },
+    ];
+    for (const config of invalids) expect((await f.call("/config/draft", { config, expectedVersion: 0, reason: "Test invalid settings" })).status).toBe(400);
+    expect((await f.call("/revisions?before=nope")).status).toBe(400);
+    expect((await f.call("/config")).status).toBe(200);
+  });
+
+  it("uses the published model snapshot and prices actual cleanup usage correctly", async () => {
+    const f = await workspaceFixture();
+    vi.mocked(f.services.transcribe).mockResolvedValue({ text: "hello", model: "nova-3" });
+    const config = defaultAiConfiguration(); config.asr.model = "nova-3"; config.cleanup.model = "gpt-oss-120b";
+    const saved = await (await f.save(config)).json() as { draft: { id: string } };
+    await f.publish(saved.draft, 1);
+    const response = await f.handler(transcriptionRequest(makeWav(1), f.browser.android.accessToken), f.environment);
+    expect(response.status).toBe(200);
+    expect(f.services.transcribe).toHaveBeenLastCalledWith(f.environment, expect.any(ArrayBuffer), expect.any(Object), expect.any(AbortSignal), config);
+    expect(f.services.polish).toHaveBeenLastCalledWith(f.environment, "hello", expect.any(Object), expect.any(AbortSignal), config);
+    const body = await response.json() as { usage: { estimatedCostUsd: number } };
+    expect(body.usage.estimatedCostUsd).toBeCloseTo(0.0052 / 60 + (80 * 0.35 + 20 * 0.75) / 1_000_000, 8);
+  });
+
+  it("can disable cleanup and pause new dictation without calling inference", async () => {
+    const f = await workspaceFixture();
+    const config = defaultAiConfiguration(); config.cleanup.enabled = false;
+    const saved = await (await f.save(config)).json() as { draft: { id: string } };
+    await f.publish(saved.draft, 1);
+    const response = await f.handler(transcriptionRequest(makeWav(1), f.browser.android.accessToken), f.environment);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ text: "hello", polished: false, usage: { inputTokens: 0, outputTokens: 0 } });
+    expect(f.services.polish).not.toHaveBeenCalled();
+    config.service.enabled = false; config.service.maintenanceMessage = "Back shortly while we improve recognition.";
+    const paused = await (await f.save(config, 2)).json() as { draft: { id: string } };
+    await f.publish(paused.draft, 3);
+    vi.mocked(f.services.transcribe).mockClear();
+    const unavailable = await f.handler(transcriptionRequest(makeWav(1), f.browser.android.accessToken), f.environment);
+    expect(unavailable.status).toBe(503);
+    expect(await unavailable.json()).toMatchObject({ error: { code: "SERVICE_UNAVAILABLE", message: config.service.maintenanceMessage } });
+    expect(f.services.transcribe).not.toHaveBeenCalled();
+  });
+
+  it("tests drafts with number guardrails and charges only cleanup, without saving sample text", async () => {
+    const f = await workspaceFixture(fakeServices("not used", "Invoice for 500 rupees."));
+    const config = defaultAiConfiguration(); config.cleanup.model = "gpt-oss-120b";
+    const response = await f.call("/preview", { config, text: "Invoice for 2500 rupees", glossary: ["PrivateSampleVocabulary"], sentenceStart: true, commands: true });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ text: "Invoice for 2500 rupees", candidate: "Invoice for 500 rupees.", accepted: false, status: "guardrail_fallback", model: "gpt-oss-120b", usage: { inputTokens: 80, outputTokens: 20 } });
+    expect(f.services.transcribe).not.toHaveBeenCalled();
+    const day = await env.DB.prepare("SELECT used_audio_seconds, reserved_neurons, used_neurons FROM daily_usage WHERE user_id = (SELECT user_id FROM admin_browser_sessions LIMIT 1)").first();
+    expect(day).toMatchObject({ used_audio_seconds: 0, reserved_neurons: 0 });
+    expect(Number(day?.used_neurons)).toBeCloseTo((80 * 31818 + 20 * 68182) / 1_000_000);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS count FROM ai_config_revisions").first<{ count: number }>())?.count).toBe(0);
+    const audits = await env.DB.prepare("SELECT * FROM admin_audit_events").all();
+    expect(JSON.stringify(audits.results)).not.toContain("PrivateSampleVocabulary");
+    expect((await readActiveAiConfiguration(f.environment)).revisionId).toBeNull();
+  });
+
+  it("enforces the service neuron budget before a preview and skips inference when cleanup is off", async () => {
+    const f = await workspaceFixture();
+    const config = defaultAiConfiguration();
+    const sample = { config, text: "Hello there", glossary: [], sentenceStart: true, commands: false };
+    const dateKey = new Date().toISOString().slice(0, 10);
+    await env.DB.prepare("INSERT OR IGNORE INTO global_daily_usage(date_key, used_neurons, reserved_neurons) VALUES(?, 0, 0)").bind(dateKey).run();
+    const previous = await env.DB.prepare("SELECT used_neurons FROM global_daily_usage WHERE date_key = ?").bind(dateKey).first<{ used_neurons: number }>();
+    await env.DB.prepare("UPDATE global_daily_usage SET used_neurons = 8000 WHERE date_key = ?").bind(dateKey).run();
+    try {
+      const blocked = await f.call("/preview", sample);
+      expect(blocked.status).toBe(503);
+      expect(await blocked.json()).toMatchObject({ error: { code: "SERVICE_DAILY_LIMIT_REACHED" } });
+      config.cleanup.enabled = false;
+      const disabled = await f.call("/preview", sample);
+      expect(await disabled.json()).toMatchObject({ text: "Hello there", status: "cleanup_disabled", usage: null });
+      expect(f.services.polish).not.toHaveBeenCalled();
+    } finally {
+      await env.DB.prepare("UPDATE global_daily_usage SET used_neurons = ? WHERE date_key = ?").bind(previous!.used_neurons, dateKey).run();
+    }
+  });
+
+  it("settles failed preview conservatively and blocks oversized input or rate-limited tests", async () => {
+    const f = await workspaceFixture();
+    const config = defaultAiConfiguration();
+    vi.mocked(f.services.polish).mockRejectedValue(new Error("secret provider error"));
+    const sample = { config, text: "Hello there", glossary: [], sentenceStart: true, commands: false };
+    const failed = await f.call("/preview", sample);
+    expect(failed.status).toBe(502);
+    expect(JSON.stringify(await failed.json())).not.toContain("secret provider error");
+    const day = await env.DB.prepare("SELECT used_neurons, reserved_neurons FROM daily_usage WHERE user_id = (SELECT user_id FROM admin_browser_sessions LIMIT 1)").first();
+    expect(day).toMatchObject({ used_neurons: cleanupReservation(config), reserved_neurons: 0 });
+    vi.mocked(f.services.polish).mockClear();
+    expect((await f.call("/preview", { ...sample, text: "😀".repeat(2000) })).status).toBe(400);
+    expect(f.services.polish).not.toHaveBeenCalled();
+    vi.mocked(f.environment.AUTH_RATE_LIMITER.limit).mockResolvedValue({ success: false });
+    expect((await f.call("/preview", sample)).status).toBe(429);
+  });
+});
+
+describe("configured inference bindings", () => {
+  const options = { locale: "en-IN", polish: "light", sentenceStart: true, glossary: ["WoVoice"], commands: [] } as const;
+  function bindingFixture(response: unknown) {
+    const environment = fakeEnv();
+    const run = vi.fn(async () => response);
+    environment.AI = { run } as unknown as AppEnv["AI"];
+    return { environment, run, signal: new AbortController().signal, options: { ...options, commands: [], glossary: ["WoVoice"] } as import("../src/types").TranscriptionOptions };
+  }
+  it("maps Whisper draft parameters and renders vocabulary hints only for the published snapshot", async () => {
+    const f = bindingFixture({ text: "Hello" }); const config = defaultAiConfiguration();
+    config.asr.whisper.beamSize = 3; config.asr.whisper.vadFilter = false;
+    config.asr.glossaryPrompt = "Names: {{glossary}}";
+    await productionServices.transcribe(f.environment, makeWav(1), f.options, f.signal, config);
+    expect(f.run).toHaveBeenCalledWith("@cf/openai/whisper-large-v3-turbo", expect.objectContaining({ beam_size: 3, vad_filter: false, initial_prompt: "Names: WoVoice" }), { signal: f.signal });
+  });
+  it("maps Nova formatting options while enforcing provider training opt-out", async () => {
+    const f = bindingFixture({ results: { channels: [{ alternatives: [{ transcript: "Hello" }] }] } });
+    const config = defaultAiConfiguration("nova-3"); config.asr.nova.numerals = false; config.asr.nova.fillerWords = true;
+    await productionServices.transcribe(f.environment, makeWav(1), f.options, f.signal, config);
+    expect(f.run).toHaveBeenCalledWith("@cf/deepgram/nova-3", expect.objectContaining({ numerals: false, filler_words: true, mip_opt_out: true, keyterm: "WoVoice" }), { signal: f.signal });
+  });
+  it("uses the selected cleanup model, temperature, prompts, strict schema, and token ceiling", async () => {
+    const f = bindingFixture({ choices: [{ message: { content: '{"text":"Hello."}' } }], usage: { prompt_tokens: 90, completion_tokens: 12 } });
+    const config = defaultAiConfiguration(); config.cleanup.model = "gpt-oss-120b"; config.cleanup.temperature = 0.2; config.cleanup.maxOutputTokens = 200;
+    expect(await productionServices.polish(f.environment, "hello".repeat(100), f.options, f.signal, config)).toMatchObject({ text: "Hello.", inputTokens: 90, outputTokens: 12 });
+    expect(f.run).toHaveBeenCalledWith("@cf/openai/gpt-oss-120b", expect.objectContaining({ temperature: 0.2, max_tokens: 200, messages: [expect.objectContaining({ role: "system", content: config.cleanup.systemPrompt }), expect.objectContaining({ role: "user" })], response_format: expect.objectContaining({ type: "json_schema" }) }), { signal: f.signal });
+  });
+});

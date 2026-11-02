@@ -143,7 +143,9 @@ class WavRecorder(
 
     @SuppressLint("MissingPermission")
     private fun createStartedRecorder(bufferSize: Int): AudioRecord? {
-        for (source in intArrayOf(MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.MIC)) {
+        // Some Xiaomi builds give VOICE_RECOGNITION very low gain even when Android
+        // reports the client is not silenced. Prefer the regular microphone for dictation.
+        for (source in intArrayOf(MediaRecorder.AudioSource.MIC, MediaRecorder.AudioSource.VOICE_RECOGNITION)) {
             val candidate = runCatching {
                 AudioRecord.Builder()
                     .setAudioSource(source)

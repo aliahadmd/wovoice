@@ -1,3 +1,5 @@
+import type { AiConfiguration } from "./ai-config";
+
 export type AsrModel = "whisper" | "nova-3";
 export type AccountRole = "user" | "admin";
 export type AccountState = "active" | "suspended" | "banned";
@@ -27,12 +29,14 @@ export interface Services {
     audio: ArrayBuffer,
     options: TranscriptionOptions,
     signal: AbortSignal,
+    config?: AiConfiguration,
   ): Promise<AsrResult>;
   polish(
     env: AppEnv,
     rawText: string,
     options: TranscriptionOptions,
     signal: AbortSignal,
+    config?: AiConfiguration,
   ): Promise<PolishResult>;
 }
 
