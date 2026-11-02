@@ -62,7 +62,9 @@ export const productionServices: Services = {
       {
         messages: polishMessages(config, rawText, options),
         temperature: config.cleanup.temperature,
-        max_tokens: Math.min(config.cleanup.maxOutputTokens, POLISH_MAX_OUTPUT_TOKENS, Math.max(120, rawText.length * 2)),
+        // Reasoning shares the output budget. A character-based cap exhausted
+        // short recordings' allowance before the model produced final text.
+        max_tokens: Math.min(config.cleanup.maxOutputTokens, POLISH_MAX_OUTPUT_TOKENS),
         response_format: {
           type: "json_schema",
           json_schema: {

@@ -1318,3 +1318,16 @@ describe("configured inference bindings", () => {
     expect(f.run).toHaveBeenCalledWith("@cf/openai/gpt-oss-120b", expect.objectContaining({ temperature: 0.2, max_tokens: 200, messages: [expect.objectContaining({ role: "system", content: config.cleanup.systemPrompt }), expect.objectContaining({ role: "user" })], response_format: expect.objectContaining({ type: "json_schema" }) }), { signal: f.signal });
   });
 });
+
+it("allows reasoning tokens before final cleanup text even for a short transcript", async () => {
+  const environment = fakeEnv();
+  const run = vi.fn(async () => ({ choices: [{ finish_reason: "stop", message: { content: '{"text":"Please send the invoice for 2500 rupees tomorrow."}' } }], usage: { prompt_tokens: 192, completion_tokens: 149 } }));
+  environment.AI = { run } as unknown as AppEnv["AI"];
+  const config = defaultAiConfiguration();
+  const options: import("../src/types").TranscriptionOptions = { locale: "en-IN", polish: "light", sentenceStart: true, commands: ["new_line", "new_paragraph"], glossary: [] };
+  await productionServices.polish(environment, "um please send the invoice for 2500 rupees tomorrow", options, new AbortController().signal, config);
+  // A real provider probe exhausted the old 120-token allowance on reasoning,
+  // returning finish_reason=length and content=null. The same input completed
+  // in 149 tokens with the configured allowance; reasoning must never be pasted.
+  expect(run).toHaveBeenCalledWith("@cf/openai/gpt-oss-20b", expect.objectContaining({ max_tokens: 1500 }), expect.anything());
+});

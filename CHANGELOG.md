@@ -8,6 +8,7 @@
 - Changes stay in a draft until an administrator reviews and publishes them. Revision history supports restoring earlier settings as a new draft, with change notes and audit records.
 - Prompt tests show the candidate, validated output, rendered messages, latency, and estimated cost. Tests use the service budget without creating dictation History. Invalid templates and conflicting edits are rejected.
 - Recordings use one published configuration throughout processing. Quota reservations and usage estimates follow the selected models; oversized cleanup inputs retain the recognition text.
+- Short transcripts receive the configured cleanup token allowance, giving reasoning models room to produce the final text instead of exhausting a small character-based cap.
 
 ### Android
 

@@ -23,7 +23,7 @@ Approved models and versioned price estimates live in `worker/src/ai-config.ts` 
 
 Authentication, CSRF protection, provider training opt-out, output validation, locale, WAV contract, database budget ceilings, and secrets remain deployment-managed. Per-account quota grants remain in Users. These are deliberate boundaries: changing a database-enforced quota requires a migration rather than an editable number that would disagree with its trigger.
 
-Cleanup messages are bounded to 8,192 UTF-8 bytes, with 512 additional tokens reserved for chat-template overhead. Static instructions are limited to half that byte budget. Inputs that exceed the cleanup bound retain ASR text without calling the cleanup model. Output is capped at 1,500 tokens. Reservations use the selected model's rates, including the larger 120B option; known token usage settles actual cost, and attempted previews without usage settle conservatively. Preview requests are separately rate-limited and count against the global neuron ceiling without consuming audio seconds.
+Cleanup messages are bounded to 8,192 UTF-8 bytes, with 512 additional tokens reserved for chat-template overhead. Static instructions are limited to half that byte budget. Inputs that exceed the cleanup bound retain ASR text without calling the cleanup model. Output is capped at 1,500 tokens, including model reasoning. Short transcripts use the configured ceiling because a character-based cap can exhaust the allowance before final text is produced. Reservations use the selected model's rates, including the larger 120B option; known token usage settles actual cost, and attempted previews without usage settle conservatively. Preview requests are separately rate-limited and count against the global neuron ceiling without consuming audio seconds.
 
 Revision history is retained independently of the 90-day operational audit retention, so older configuration revisions remain available for restoration. Avoid putting personal data or credentials in prompts or change notes.
 
@@ -33,7 +33,7 @@ Run `npm test` and `npm run build` in `worker/`. Tests apply the actual migratio
 
 When deployment is authorized, apply the D1 migrations before deploying the Worker. Migration 0007 is additive; an older Worker ignores its tables, and the new Worker starts with existing defaults until the first publication. Deploying the feature must not itself publish an experimental configuration.
 
-Current validation: 76 Worker tests and 6 browser-component tests pass, along with production asset generation and both TypeScript checks. Desktop and phone-sized local browser review covers draft saving, publication review, publication, and the sample test panel. Live inference quality still depends on provider behavior and should be evaluated through authenticated prompt tests before changing the production defaults.
+Current validation: 77 Worker tests and 6 browser-component tests pass, along with production asset generation and both TypeScript checks. Desktop and phone-sized local browser review covers draft saving, publication review, publication, and the sample test panel. Live inference quality still depends on provider behavior and should be evaluated through authenticated prompt tests before changing the production defaults.
 
 ## Primary references
 
