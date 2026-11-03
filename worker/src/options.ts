@@ -1,3 +1,4 @@
+import { parseContext } from "./context";
 import { ApiError } from "./errors";
 import type { TranscriptionOptions } from "./types";
 
@@ -35,7 +36,10 @@ export function parseOptions(value: string | File | null): TranscriptionOptions 
 
   const cleanedGlossary = glossary.map((term) => term.trim());
   if (cleanedGlossary.join("\n").length > 4_000) throw invalidOptions();
+  let context: TranscriptionOptions["context"];
+  try { context = parseContext(candidate.context); } catch { throw invalidOptions(); }
   return {
+    ...(context ? { context } : {}),
     locale: "en-IN",
     polish: "light",
     sentenceStart: candidate.sentenceStart,

@@ -201,6 +201,9 @@ class WoVoiceKeyboardView(context: Context) : SwipeFrameLayout(context) {
         render()
     }
 
+    private var contextLabel: String? = null
+    fun setContextLabel(value: String?) { contextLabel = value }
+
     fun setState(value: KeyboardState) {
         if (state == value && !initialRender) return
         state = value
@@ -289,7 +292,7 @@ class WoVoiceKeyboardView(context: Context) : SwipeFrameLayout(context) {
         val thinking = state is KeyboardState.Processing
         val error = state as? KeyboardState.Error
         val statusText = when {
-            recording -> "Tap again to finish"
+            recording -> contextLabel?.let { "$it · Tap to finish" } ?: "Tap again to finish"
             thinking -> null
             error != null -> error.message
             else -> "Tap to speak"

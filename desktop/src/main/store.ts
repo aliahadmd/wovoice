@@ -1,4 +1,5 @@
 import { app } from 'electron'
+import { CONTEXT_STYLES, type ContextLevel, type ContextStyle } from '../../../worker/src/context'
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 
@@ -97,6 +98,18 @@ export class SettingsStore {
   set middleClickEnabled(value: boolean) {
     this.set('middleClickEnabled', value)
   }
+
+  get contextLevel(): ContextLevel {
+    const value = this.get<string>(`contextLevel_${this.get('accountId', 'local')}`, 'off')
+    return value === 'app' || value === 'nearby' ? value : 'off'
+  }
+  set contextLevel(value: ContextLevel) { this.set(`contextLevel_${this.get('accountId', 'local')}`, value) }
+  get contextStyle(): ContextStyle {
+    const value = this.get<ContextStyle>(`contextStyle_${this.get('accountId', 'local')}`, 'auto')
+    return CONTEXT_STYLES.includes(value) ? value : 'auto'
+  }
+  set contextStyle(value: ContextStyle) { this.set(`contextStyle_${this.get('accountId', 'local')}`, value) }
+  get contextOwner(): string { return this.get('accountId', 'local') }
 
   clearAccount(): void {
     // cloudSyncMigratedAccount survives sign-out: that account's vault import is done here.

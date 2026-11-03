@@ -25,11 +25,15 @@ const api = {
     middleClickEnabled: boolean
     triggerKey: string
     workerUrl: string
+    contextOwner: string
+    contextLevel: 'off' | 'app' | 'nearby'
+    contextStyle: 'auto' | 'natural' | 'polite' | 'professional' | 'concise'
   }> => ipcRenderer.invoke('settings:get'),
   settingsSet: (
-    key: 'keyboardShortcutEnabled' | 'middleClickEnabled' | 'triggerKey',
-    value: boolean | string
-  ): Promise<boolean> => ipcRenderer.invoke('settings:set', key, value),
+    key: 'keyboardShortcutEnabled' | 'middleClickEnabled' | 'triggerKey' | 'contextLevel' | 'contextStyle',
+    value: boolean | string,
+    contextOwner?: string
+  ): Promise<boolean> => ipcRenderer.invoke('settings:set', key, value, contextOwner),
   homeStats: (period: 'today' | '7d' | '30d' | 'all'): Promise<{
     dictations: number
     audioDurationMs: number
@@ -78,14 +82,14 @@ const api = {
   dismissPolicyNotice: (): Promise<void> => ipcRenderer.invoke('app:dismissPolicyNotice'),
   getLoginItem: (): Promise<boolean> => ipcRenderer.invoke('app:getLoginItem'),
   overlay: {
-    done: (payload: { wav: ArrayBuffer; durationMs: number; containsSpeech: boolean }): void =>
+    done: (payload: { sessionId: number; wav: ArrayBuffer; durationMs: number; containsSpeech: boolean }): void =>
       ipcRenderer.send('overlay:done', payload),
-    cancelled: (): void => ipcRenderer.send('overlay:cancelled'),
-    autoStop: (): void => ipcRenderer.send('overlay:autoStop'),
-    fail: (message: string): void => ipcRenderer.send('overlay:fail', message),
-    onBegin: (listener: (releaseHint: string) => void): void => {
-      ipcRenderer.on('overlay:begin', (_event, releaseHint: unknown) =>
-        listener(typeof releaseHint === 'string' ? releaseHint : 'Release ⌥')
+    cancelled: (id: number): void => ipcRenderer.send('overlay:cancelled', id),
+    autoStop: (id: number): void => ipcRenderer.send('overlay:autoStop', id),
+    fail: (message: string, id: number): void => ipcRenderer.send('overlay:fail', message, id),
+    onBegin: (listener: (releaseHint: string, sessionId: number) => void): void => {
+      ipcRenderer.on('overlay:begin', (_event, releaseHint: unknown, sessionId: number) =>
+        listener(typeof releaseHint === 'string' ? releaseHint : 'Release ⌥', sessionId)
       )
     },
     onEnd: (listener: () => void): void => {
@@ -94,7 +98,7 @@ const api = {
     onState: (
       listener: (
         state:
-          | { state: 'transcribing' }
+          | { state: 'transcribing'; contextLabel?: string }
           | { state: 'success'; text: string; polished: boolean }
           | { state: 'error'; message: string }
           | { state: 'cancelled' }

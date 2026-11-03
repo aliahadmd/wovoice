@@ -3,9 +3,12 @@ import { join } from 'path'
 import { WorkerError } from './worker'
 import { pasteText } from './insert'
 import { playSound } from './sounds'
+import { ContextReader, restrictContext, type ContextLevel, type ContextStyle, type ContextTarget, type DictationContext } from './context'
+import { contextLabel } from '../../../worker/src/context'
+import { DictationSession } from './dictation-session'
 
 export interface DictationDeps {
-  settings: { workerUrl: string }
+  settings: { workerUrl: string; contextLevel: ContextLevel; contextStyle: ContextStyle; contextOwner: string }
   getToken: () => Promise<string>
   /** Drops a cached access token the Worker rejected so getToken() refreshes. */
   invalidateToken: (token: string) => void
@@ -13,7 +16,9 @@ export interface DictationDeps {
   transcribe: (
     token: string,
     wav: Buffer,
-    glossary: string[]
+    glossary: string[],
+    context?: DictationContext,
+    sentenceStart?: boolean
   ) => Promise<{
     text: string
     polished: boolean
@@ -34,7 +39,7 @@ export interface DictationDeps {
 }
 
 export type OverlayState =
-  | { state: 'transcribing' }
+  | { state: 'transcribing'; contextLabel?: string }
   | { state: 'success'; text: string; polished: boolean }
   | { state: 'error'; message: string }
   | { state: 'cancelled' }
@@ -53,6 +58,10 @@ const PIPELINE_TIMEOUT_MS = 120_000
  */
 export class DictationService {
   private overlay: BrowserWindow | null = null
+  private readonly contextReader = new ContextReader()
+  private readonly sessions = new DictationSession()
+  private sessionId = 0
+  private contextTarget: Promise<ContextTarget> | null = null
   private recording = false
   private processing = false
   private watchdog: ReturnType<typeof setTimeout> | null = null
@@ -91,6 +100,7 @@ export class DictationService {
   /** Load the overlay page at startup so the first dictation isn't lost. */
   prepare(): void {
     this.ensureOverlay()
+    this.contextReader.prepare()
   }
 
   /** ⌥Space hotkey: tap toggles (start; tap again to stop). */
@@ -102,12 +112,14 @@ export class DictationService {
   /** `releaseHint` names what ends the recording, e.g. "Release ⌘". */
   begin(releaseHint = 'Release ⌥'): void {
     if (this.recording || this.processing) return
+    this.sessionId = this.sessions.begin(this.deps.settings.contextOwner)
+    this.contextTarget = this.contextReader.capture(this.deps.settings.contextLevel, this.deps.settings.contextStyle)
     console.log('[dictation] begin')
     const overlay = this.ensureOverlay()
     overlay.showInactive()
     this.recording = true
     playSound('start')
-    this.sendToOverlay(overlay, 'overlay:begin', releaseHint)
+    this.sendToOverlay(overlay, 'overlay:begin', releaseHint, this.sessionId)
     // Esc cancels the in-flight recording (a global grab for a few seconds).
     const escOk = globalShortcut.register('Escape', () => this.cancelUser())
     console.log('[dictation] esc-to-cancel registered:', escOk)
@@ -125,7 +137,12 @@ export class DictationService {
   }
 
   cancelUser(): void {
-    if (this.recording) {
+    if (this.recording || this.processing) {
+      this.sessions.invalidate()
+      this.contextReader.dispose()
+      this.contextTarget = null
+      this.processing = false
+      this.clearWatchdog()
       console.log('[dictation] cancelled by user')
       this.recording = false
       this.releaseEscape()
@@ -145,6 +162,15 @@ export class DictationService {
    * this service still thought it was recording, so the WAV was ignored as
    * stale and the whole dictation was lost. End the session here instead.
    */
+  onAccountChanged(): void {
+    if ((this.recording || this.processing) && !this.sessions.active(this.sessionId, this.deps.settings.contextOwner)) {
+      this.cancel()
+      this.deps.onSessionAborted?.()
+    }
+  }
+
+  matchesSession(id: number): boolean { return id === this.sessionId && this.sessions.active(id, this.deps.settings.contextOwner) }
+
   autoStop(): void {
     if (!this.recording) return
     console.log('[dictation] 60-second limit reached')
@@ -152,7 +178,12 @@ export class DictationService {
     this.deps.onSessionAborted?.()
   }
 
+  dispose(): void { this.cancel(); this.contextReader.dispose() }
+
   cancel(): void {
+    this.sessions.invalidate()
+    this.contextReader.dispose()
+    this.contextTarget = null
     this.recording = false
     this.processing = false
     this.clearWatchdog()
@@ -161,6 +192,9 @@ export class DictationService {
   }
 
   fail(message: string): void {
+    this.sessions.invalidate()
+    this.contextReader.dispose()
+    this.contextTarget = null
     console.log('[dictation] fail:', message)
     this.processing = false
     this.recording = false
@@ -221,16 +255,20 @@ export class DictationService {
 
   /** Called by the overlay once its WAV is ready. */
   async handleCapture(payload: {
+    sessionId: number
     wav: ArrayBuffer
     durationMs: number
     containsSpeech: boolean
   }): Promise<void> {
     // Only accept a WAV for a session that actually reached "processing" —
     // a stale capture from a cancelled session must never be transcribed.
-    if (!this.processing) {
+    if (!this.processing || !this.sessions.claim(payload.sessionId, this.deps.settings.contextOwner)) {
       console.log('[dictation] ignoring capture — no active session')
       return
     }
+    const sessionId = payload.sessionId
+    const active = (): boolean => this.processing && this.sessions.active(sessionId, this.deps.settings.contextOwner)
+    const targetPromise = this.contextTarget
     this.armWatchdog()
     try {
       console.log(
@@ -245,9 +283,17 @@ export class DictationService {
       const wav = Buffer.from(payload.wav)
       const glossary = await this.deps.getGlossary()
       const token = await this.deps.getToken()
+      const target = await targetPromise
+      if (!active()) return
+      if (!target?.token) { this.fail(target?.reason === 'accessibility' ? 'Allow Accessibility access for WoVoice in Settings, then try again.' : 'This editor does not expose a safe insertion target. Select a supported text box and try again.'); return }
+      const context = (): DictationContext | undefined => {
+        const captured = restrictContext(target.context, this.deps.settings.contextLevel)
+        return captured ? { ...captured, style: this.deps.settings.contextStyle } : undefined
+      }
+      this.sendState({ state: 'transcribing', contextLabel: contextLabel(context()) })
       let outcome: Awaited<ReturnType<DictationDeps['transcribe']>>
       try {
-        outcome = await this.deps.transcribe(token, wav, glossary)
+        outcome = await this.deps.transcribe(token, wav, glossary, context(), target.sentenceStart)
       } catch (error) {
         // A token the server no longer accepts (expired early, or rotated away)
         // gets one refresh-and-retry, as on the phone, before failing the dictation.
@@ -255,12 +301,19 @@ export class DictationService {
           error instanceof WorkerError &&
           (error.code === 'TOKEN_EXPIRED' || error.code === 'AUTH_REQUIRED')
         if (!rejected) throw error
+        if (!active()) return
         this.deps.invalidateToken(token)
-        outcome = await this.deps.transcribe(await this.deps.getToken(), wav, glossary)
+        const refreshed = await this.deps.getToken()
+        if (!active()) return
+        outcome = await this.deps.transcribe(refreshed, wav, glossary, context(), target.sentenceStart)
       }
       // Never log the transcript itself — stdout is a plaintext voice memo.
       console.log('[dictation] transcribed:', outcome.text.length, 'chars')
-      await pasteText(outcome.text)
+      if (!active()) return
+      await pasteText(outcome.text, async () => active() && await this.contextReader.validate(target.token) && active())
+      if (!active()) return
+      this.contextReader.dispose()
+      this.contextTarget = null
       console.log('[dictation] pasted')
       this.deps.recordHistory({
         text: outcome.text,
@@ -280,12 +333,14 @@ export class DictationService {
       })
       this.hideAfter(SUCCESS_VISIBLE_MS)
     } catch (error) {
-      console.error('[dictation] failed:', error)
+      if (!active()) return
+      // Error payloads can contain provider or editor details: do not log them.
+      console.error('[dictation] request or insertion failed')
       if (error instanceof WorkerError && (error.code === 'AUTH_REQUIRED' || error.code === 'HTTP_401')) {
         this.fail('Sign in to use voice dictation')
         return
       }
-      const message = error instanceof WorkerError ? error.message : 'Dictation error — try again'
+      const message = error instanceof WorkerError ? error.message : error instanceof Error && error.message === 'EDITOR_CHANGED' ? 'The text box or cursor changed. Nothing was inserted; speak again in the intended field.' : 'Dictation error — try again'
       this.fail(message)
     }
   }

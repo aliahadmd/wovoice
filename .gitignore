@@ -31,3 +31,5 @@ desktop/native/tapd
 /desktop/node_modules
 /desktop/out
 /desktop/dist
+
+desktop/native/contextd

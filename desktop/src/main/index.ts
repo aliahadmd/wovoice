@@ -92,7 +92,7 @@ const dictation = new DictationService({
   },
   invalidateToken: (token) => session.invalidateAccessToken(token),
   getGlossary: async () => db.bestGlossary(100),
-  transcribe: (token, wav, glossary) => worker.transcribe(token, wav, glossary),
+  transcribe: (token, wav, glossary, context, sentenceStart) => worker.transcribe(token, wav, glossary, context, sentenceStart),
   onSessionAborted: () => triggers.reset(),
   recordHistory: (entry) => {
     const now = new Date()
@@ -138,6 +138,7 @@ const triggers = new TriggerEngine(
 )
 
 function broadcastAuthState(extra: Record<string, unknown> = {}): void {
+  if (app.isReady()) dictation.onAccountChanged()
   dashboard?.webContents.send('auth:state', {
     signedIn: session.hasRefreshToken,
     email: settings.get<string | null>('accountEmail', null),
@@ -448,15 +449,21 @@ app.whenReady().then(() => {
     keyboardShortcutEnabled: settings.get<boolean>('keyboardShortcutEnabled', true),
     middleClickEnabled: settings.get<boolean>('middleClickEnabled', false),
     triggerKey: settings.get<string>('triggerKey', 'option'),
-    workerUrl: settings.workerUrl
+    workerUrl: settings.workerUrl,
+    contextLevel: settings.contextLevel,
+    contextStyle: settings.contextStyle,
+    contextOwner: settings.contextOwner
   }))
-  ipcMain.handle('settings:set', (_event, key: string, value: unknown) => {
+  ipcMain.handle('settings:set', (_event, key: string, value: unknown, contextOwner?: string) => {
+    if ((key === 'contextLevel' || key === 'contextStyle') && contextOwner !== settings.contextOwner) return false
     if (key === 'keyboardShortcutEnabled' || key === 'middleClickEnabled') {
       if (typeof value !== 'boolean') return false
       settings.set(key, value)
       if (value) triggers.registerIfMissing()
       return true
     }
+    if (key === 'contextLevel' && (value === 'off' || value === 'app' || value === 'nearby')) { settings.contextLevel = value; return true }
+    if (key === 'contextStyle' && typeof value === 'string' && ['auto', 'natural', 'polite', 'professional', 'concise'].includes(String(value))) { settings.contextStyle = value as typeof settings.contextStyle; return true }
     if (key === 'triggerKey') {
       if (typeof value !== 'string' || !TRIGGER_KEYS.includes(value)) return false
       settings.set(key, value)
@@ -554,13 +561,13 @@ app.whenReady().then(() => {
   ipcMain.handle('app:getLoginItem', () => app.getLoginItemSettings().openAtLogin)
 
 
-  ipcMain.on('overlay:done', (_event, payload: { wav: ArrayBuffer; durationMs: number; containsSpeech: boolean }) => {
+  ipcMain.on('overlay:done', (_event, payload: { sessionId: number; wav: ArrayBuffer; durationMs: number; containsSpeech: boolean }) => {
     console.log('[overlay] done received:', payload.durationMs, 'ms, speech =', payload.containsSpeech)
     void dictation.handleCapture(payload)
   })
-  ipcMain.on('overlay:cancelled', () => dictation.cancelUser())
-  ipcMain.on('overlay:autoStop', () => dictation.autoStop())
-  ipcMain.on('overlay:fail', (_event, message: string) => dictation.fail(message))
+  ipcMain.on('overlay:cancelled', (_event, id: number) => { if (dictation.matchesSession(id)) dictation.cancelUser() })
+  ipcMain.on('overlay:autoStop', (_event, id: number) => { if (dictation.matchesSession(id)) dictation.autoStop() })
+  ipcMain.on('overlay:fail', (_event, message: string, id: number) => { if (dictation.matchesSession(id)) dictation.fail(message) })
   ipcMain.on('overlay:label', () => {
     // The overlay owns its label during capture; forwarded updates ignored in v1.
   })
@@ -613,6 +620,7 @@ function routeDeepLink(value: string): void {
 }
 
 app.on('will-quit', () => {
+  dictation.dispose()
   globalShortcut.unregisterAll()
 })
 

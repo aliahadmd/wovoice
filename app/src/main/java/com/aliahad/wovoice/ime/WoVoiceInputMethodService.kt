@@ -19,6 +19,7 @@ import com.aliahad.wovoice.core.EditorPolicy
 import com.aliahad.wovoice.core.EditorSessionGuard
 import com.aliahad.wovoice.core.KeyboardState
 import com.aliahad.wovoice.core.TextCommitPolicy
+import com.aliahad.wovoice.context.ContextCapture
 import com.aliahad.wovoice.network.TranscriptionClient
 import com.aliahad.wovoice.account.AccountResult
 import com.aliahad.wovoice.account.SessionManager
@@ -55,6 +56,8 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
     private var currentSession = 0L
     private var captureSession = 0L
     private var sentenceStartForCapture = true
+    private var contextCapture: ContextCapture? = null
+    private var captureOwner: String? = null
     private var networkJob: Job? = null
     private var activeFile: File? = null
     private var captureBinder: VoiceCaptureService.LocalBinder? = null
@@ -179,6 +182,9 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
         cancelActiveWork(resetState = false)
         captureSession = currentSession
         sentenceStartForCapture = TextCommitPolicy.isSentenceStartAfter(textBeforeCursor())
+        captureOwner = settings.accountId
+        contextCapture = ContextCapture.start(scope, settings, currentInputEditorInfo, currentInputConnection)
+        keyboard?.setContextLabel(contextCapture?.label(settings))
         state = KeyboardState.Recording
         keyboard?.setState(state)
         try {
@@ -307,8 +313,13 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
     private fun transcribe(file: File, session: Long, audioDurationMs: Long) {
         val workerUrl = settings.workerUrl
         networkJob?.cancel()
+        val capture = contextCapture
+        val owner = captureOwner
         networkJob = scope.launch {
             try {
+                val capturedContext = capture?.snapshot(settings)
+                if (!sessions.isActive(session) || session != currentSession) return@launch
+                if (owner != settings.accountId) { showError("Account changed. Speak again."); return@launch }
                 val result = withContext(Dispatchers.IO) {
                     val glossary = repository.bestGlossary()
                     val auth = account.validAccessToken()
@@ -316,17 +327,19 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
                         TranscriptionClient.Result.Error(auth.message, auth.retryable, auth.code, auth.status)
                     } else {
                         val token = (auth as AccountResult.Success).value
-                        val first = client.transcribe(workerUrl, token, file, sentenceStartForCapture, glossary)
+                        if (owner != settings.accountId) return@withContext TranscriptionClient.Result.Error("Account changed. Speak again.", false)
+                        val first = client.transcribe(workerUrl, token, file, sentenceStartForCapture, glossary, capturedContext?.restricted(settings.contextLevel))
                         if (first is TranscriptionClient.Result.Error &&
                             (first.code == "TOKEN_EXPIRED" || first.code == "AUTH_REQUIRED")
                         ) {
                             when (val refreshed = account.refreshAfterRejected(token)) {
-                                is AccountResult.Success -> client.transcribe(
+                                is AccountResult.Success -> if (owner != settings.accountId) TranscriptionClient.Result.Error("Account changed. Speak again.", false) else client.transcribe(
                                     workerUrl,
                                     refreshed.value,
                                     file,
                                     sentenceStartForCapture,
                                     glossary,
+                                    capturedContext?.restricted(settings.contextLevel),
                                 )
                                 is AccountResult.Error -> TranscriptionClient.Result.Error(
                                     refreshed.message,
@@ -339,6 +352,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
                     }
                 }
                 if (!sessions.isActive(session) || session != currentSession) return@launch
+                if (owner != settings.accountId) { showError("Account changed. Speak again."); return@launch }
                 if (!isInputViewShown) {
                     // The keyboard can reappear within the same input session (e.g. the
                     // notification shade). Never leave it rendering a stale Processing state.
@@ -349,6 +363,7 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
                     is TranscriptionClient.Result.Success -> {
                         val profile = withContext(Dispatchers.IO) { account.loadProfile() }
                         if (!sessions.isActive(session) || session != currentSession) return@launch
+                        if (owner != settings.accountId) { showError("Account changed. Speak again."); return@launch }
                         if (!isInputViewShown) {
                             discardTransientState()
                             return@launch
@@ -376,6 +391,8 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
                     }
                 }
             } finally {
+                capture?.cancel()
+                if (contextCapture === capture) contextCapture = null
                 file.delete()
                 if (activeFile == file) activeFile = null
             }
@@ -486,6 +503,8 @@ class WoVoiceInputMethodService : InputMethodService(), WoVoiceKeyboardView.List
         captureBinder?.cancelCapture()
         networkJob?.cancel()
         networkJob = null
+        contextCapture?.cancel()
+        contextCapture = null
         client.cancel()
         activeFile?.delete()
         activeFile = null

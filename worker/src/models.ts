@@ -1,5 +1,5 @@
 import { POLISH_MAX_OUTPUT_TOKENS } from "./pricing";
-import { assertPolishInputFits, cleanupPricing, defaultAiConfiguration, polishMessages, renderTemplate } from "./ai-config";
+import { preparePolishContext, cleanupPricing, defaultAiConfiguration, polishMessages, renderTemplate } from "./ai-config";
 import type { AsrResult, PolishResult, Services, TranscriptionOptions } from "./types";
 
 const WHISPER_MODEL = "@cf/openai/whisper-large-v3-turbo" as const;
@@ -56,11 +56,11 @@ export const productionServices: Services = {
 
   async polish(env, rawText, options, signal, configuration): Promise<PolishResult> {
     const config = configuration ?? defaultAiConfiguration(env.ASR_MODEL);
-    assertPolishInputFits(config, rawText, options);
+    const prepared = preparePolishContext(config, rawText, options);
     const response = await env.AI.run(
       cleanupPricing(config.cleanup.model).providerId,
       {
-        messages: polishMessages(config, rawText, options),
+        messages: polishMessages(config, rawText, prepared),
         temperature: config.cleanup.temperature,
         // Reasoning shares the output budget. A character-based cap exhausted
         // short recordings' allowance before the model produced final text.

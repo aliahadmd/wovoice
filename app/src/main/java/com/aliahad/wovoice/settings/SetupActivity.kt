@@ -42,6 +42,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.aliahad.wovoice.context.ContextLevel
+import com.aliahad.wovoice.context.ContextPolicy
 import com.aliahad.wovoice.R
 import com.aliahad.wovoice.account.AccountResult
 import com.aliahad.wovoice.account.AccountState
@@ -567,6 +569,8 @@ class SetupActivity : AppCompatActivity() {
         }
     }
 
+    private var contextStatus: TextView? = null
+
     private fun buildSettingsScreen(): View {
         val body = pageColumn()
         body.addView(hero("Settings", "Setup, preferences, privacy, and data"))
@@ -602,6 +606,21 @@ class SetupActivity : AppCompatActivity() {
             },
             settingAction("Keep the bubble available", "Allow background activity so your phone does not stop WoVoice", "Configure", ::showBubbleBackgroundHelp),
         )))
+
+        contextStatus = statusText()
+        body.addView(settingsCard("AUTOMATIC CONTEXT", listOf(
+            contextStatus!!,
+            settingAction("Understand the writing situation", "Detect the app and field automatically. No situation picker while dictating.", "Choose", ::chooseContext),
+            settingAction("Style preference", "Automatic follows the available clues; unknown audiences keep your natural tone.", "Choose") {
+                val labels = arrayOf("Automatic (recommended)", "Natural", "Polite", "Professional", "Concise")
+                MaterialAlertDialogBuilder(this).setTitle("Style preference")
+                    .setSingleChoiceItems(labels, ContextPolicy.styles.indexOf(store.contextStyle)) { dialog, index ->
+                        store.contextStyle = ContextPolicy.styles[index]
+                        updateContextStatus(); dialog.dismiss()
+                    }.setNegativeButton("Cancel", null).show()
+            },
+        )))
+        updateContextStatus()
 
         accountStatus = statusText()
         accountQuota = statusText()
@@ -687,7 +706,7 @@ class SetupActivity : AppCompatActivity() {
 
         body.addView(settingsCard("PRIVACY & DATA", listOf(
             TextView(this).apply {
-                text = "Recordings are temporary and deleted after dictation. A failed bubble upload may stay on this phone for up to a minute for Retry, and is removed on cancel or a text-box change. Raw ASR, correction context, and source-app identity are never retained. Synced history, approved dictionary entries, and analytics are encrypted for storage by WoVoice."
+                text = "Recordings are temporary and deleted after dictation. A failed bubble upload may stay on this phone for up to a minute for Retry, and is removed on cancel or a text-box change. Optional automatic context sends a writing-task category; Nearby text also sends up to 512 characters before and 128 after the cursor for this request only. Context is not saved in history, sync, or logs; source-app identity stays on this phone. Synced history, approved dictionary entries, and analytics are encrypted for storage by WoVoice."
                 styleText(14f, MUTED)
                 setLineSpacing(dp(3).toFloat(), 1.15f)
                 setPadding(0, dp(4), 0, dp(10))
@@ -705,6 +724,7 @@ class SetupActivity : AppCompatActivity() {
 
     private fun updateSetupStatus() {
         updateBubbleStatus()
+        updateContextStatus()
         val micGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         if (micGranted && !pendingBubbleSetup) maybeRequestNotificationPermission()
         microphoneStatus?.text = if (micGranted) "✓ Allowed and ready" else "Permission required for speech input"
@@ -791,10 +811,32 @@ class SetupActivity : AppCompatActivity() {
             }.show()
     }
 
+    private fun updateContextStatus() {
+        val label = when (store.contextLevel) { ContextLevel.OFF -> "Off"; ContextLevel.APP -> "App and field only"; ContextLevel.NEARBY -> "App, field, and nearby text" }
+        contextStatus?.text = "$label • Style: ${store.contextStyle}"
+    }
+
+    private fun chooseContext() {
+        val levels = ContextLevel.entries
+        MaterialAlertDialogBuilder(this).setTitle("Automatic context")
+            .setSingleChoiceItems(arrayOf("Off", "App and field only", "App, field, and nearby text"), levels.indexOf(store.contextLevel)) { dialog, index ->
+                dialog.dismiss()
+                val level = levels[index]
+                if (level == ContextLevel.OFF) { store.contextLevel = level; updateContextStatus() }
+                else MaterialAlertDialogBuilder(this)
+                    .setTitle(if (level == ContextLevel.NEARBY) "Allow nearby text?" else "Allow app and field context?")
+                    .setMessage(if (level == ContextLevel.NEARBY)
+                        "When you start dictation, WoVoice uses the focused editor and up to 512 characters before and 128 after your selection. These snippets go to WoVoice’s Cloudflare service with that recording to guide grammar and tone. They are not saved in history, sync, or logs. It does not read full conversations or contacts. Password and sensitive fields are excluded. You can switch this off at any time."
+                        else "When you start dictation, WoVoice detects the app and field locally and sends only a writing-task category, such as chat or email. App names, field labels, and existing text are not sent. Unknown situations keep your natural tone. You can switch this off at any time.")
+                    .setPositiveButton("Allow") { _, _ -> store.contextLevel = level; updateContextStatus() }
+                    .setNegativeButton("Cancel", null).show()
+            }.setNegativeButton("Cancel", null).show()
+    }
+
     private fun enableBubble() {
         MaterialAlertDialogBuilder(this)
             .setTitle("Speak without switching keyboard")
-            .setMessage("WoVoice needs Accessibility access to find and edit the text box you select. Text already in the box is read only on this phone to preserve it; it is never sent to WoVoice. Only your recording and approved Dictionary terms are sent for transcription.\n\nRecording starts when you tap the bubble. Failed uploads may stay on this phone for up to a minute for Retry. Password and PIN fields are blocked. You can turn this off here at any time.")
+            .setMessage("WoVoice needs Accessibility access to find and edit the text box you select. Text already in the box is read on this phone to preserve it. Your recording and approved Dictionary terms are sent for transcription. Automatic context is off until you enable it separately; Nearby text requires a separate choice to send bounded cursor text for that dictation.\n\nRecording starts when you tap the bubble. Failed uploads may stay on this phone for up to a minute for Retry. Password and PIN fields are blocked. You can turn this off here at any time.")
             .setNegativeButton("Not now") { _, _ -> updateBubbleStatus() }
             .setOnCancelListener { updateBubbleStatus() }
             .setPositiveButton("Continue") { _, _ ->

@@ -1,4 +1,5 @@
-import { AI_MODEL_CATALOG, CLEANUP_INPUT_BYTE_LIMIT, assertPolishInputFits, cleanupPricing, cleanupReservation, isRecord, polishMessages } from "./ai-config";
+import { contextSkipsCleanup, parseContext } from "./context";
+import { AI_MODEL_CATALOG, CLEANUP_INPUT_BYTE_LIMIT, preparePolishContext, cleanupPricing, cleanupReservation, isRecord, polishMessages } from "./ai-config";
 import { listAiRevisions, parseConfiguration, readAiRevision, readAiWorkspace, saveAiRevision } from "./ai-config-store";
 import { ApiError } from "./errors";
 import { noStoreJson, readJson } from "./http";
@@ -43,11 +44,11 @@ export async function handleAdminAiRoute(request: Request, env: AppEnv, requestI
     const glossary = body.glossary;
     if (!Array.isArray(glossary) || glossary.length > 30 || !glossary.every((value) => typeof value === "string" && value.trim().length > 0 && value.length <= 80)
       || typeof body.sentenceStart !== "boolean" || typeof body.commands !== "boolean") throw new ApiError(400, "INVALID_REQUEST", false, "The sample context is invalid.");
-    const options: TranscriptionOptions = { locale: "en-IN", polish: "light", sentenceStart: body.sentenceStart, commands: body.commands ? ["new_line", "new_paragraph"] : [], glossary };
-    try { assertPolishInputFits(config, text, options); }
+    let options: TranscriptionOptions = { locale: "en-IN", polish: "light", sentenceStart: body.sentenceStart, commands: body.commands ? ["new_line", "new_paragraph"] : [], glossary };
+    try { options.context = parseContext(body.context); options = preparePolishContext(config, text, options); }
     catch { throw new ApiError(400, "INVALID_REQUEST", false, "The combined prompt and sample exceed the cleanup input budget. Shorten the prompt or sample."); }
     const messages = polishMessages(config, text, options);
-    if (!config.cleanup.enabled) return noStoreJson({ requestId, text, candidate: null, accepted: false, status: "cleanup_disabled", messages, latencyMs: 0, usage: null });
+    if (!config.cleanup.enabled || contextSkipsCleanup(options.context)) return noStoreJson({ requestId, text, candidate: null, accepted: false, status: contextSkipsCleanup(options.context) ? "literal_passthrough" : "cleanup_disabled", messages, contextDecision: options.context ? { purpose: options.context.purpose, audience: options.context.audience, source: options.context.source, style: options.context.style, level: options.context.level, nearbyTextUsed: false } : null, latencyMs: 0, usage: null });
     const reservation = await reserveQuota(env, actorId, requestId, 0, config);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), config.service.timeoutMs);
@@ -55,7 +56,7 @@ export async function handleAdminAiRoute(request: Request, env: AppEnv, requestI
     let settled = false;
     try {
       const result = await services.polish(env, text, options, controller.signal, config);
-      const safe = chooseSafePolish(text, result.text);
+      const safe = chooseSafePolish(text, result.text, options.glossary);
       const price = cleanupPricing(config.cleanup.model);
       const usage = result.inputTokens !== null && result.outputTokens !== null ? {
         inputTokens: result.inputTokens, outputTokens: result.outputTokens,
@@ -66,7 +67,7 @@ export async function handleAdminAiRoute(request: Request, env: AppEnv, requestI
       settled = true;
       // Neither the sample, model output, nor rendered prompts are persisted in audit or user History.
       return noStoreJson({ requestId, text: safe ?? text, candidate: result.text, accepted: safe !== null,
-        status: safe === null ? "guardrail_fallback" : "accepted", messages, model: config.cleanup.model, latencyMs: Math.round(performance.now() - startedAt), usage });
+        status: safe === null ? "guardrail_fallback" : "accepted", messages, contextDecision: options.context ? { purpose: options.context.purpose, audience: options.context.audience, source: options.context.source, style: options.context.style, level: options.context.level, nearbyTextUsed: !!(options.context.before || options.context.after) } : null, model: config.cleanup.model, latencyMs: Math.round(performance.now() - startedAt), usage });
     } catch {
       // An attempted inference may be billed even if it times out. Settle its conservative reserve.
       await completeQuota(env, reservation, reservation.reservedNeurons); settled = true;

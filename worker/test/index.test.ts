@@ -1086,7 +1086,7 @@ function adminAuthRequest(path: string, body: unknown): Request {
   });
 }
 
-function transcriptionRequest(audio: ArrayBuffer, token: string, origin = "https://worker.test"): Request {
+function transcriptionRequest(audio: ArrayBuffer, token: string, origin = "https://worker.test", options: Record<string, unknown> = {}): Request {
   const form = new FormData();
   form.set("audio", new File([audio], "voice.wav", { type: "audio/wav" }));
   form.set("options", JSON.stringify({
@@ -1095,6 +1095,7 @@ function transcriptionRequest(audio: ArrayBuffer, token: string, origin = "https
     sentenceStart: true,
     commands: ["new_line", "new_paragraph"],
     glossary: ["Rahim"],
+    ...options,
   }));
   return new Request(`${origin}/v1/transcriptions`, { method: "POST", headers: bearer(token), body: form });
 }
@@ -1135,6 +1136,60 @@ describe("admin AI workspace", () => {
     const publish = (draft: { id: string }, expectedVersion: number) => call("/config/publish", { revisionId: draft.id, expectedVersion, reason: "Reviewed for live dictation" });
     return { ...fixture, browser, call, save, publish, services };
   }
+
+  it("uses opted-in context for cleanup without returning or retaining the snippets", async () => {
+    const f = await workspaceFixture();
+    const context = { version: 1, level: "nearby", purpose: "email", audience: "academic", source: "nearby", style: "auto", before: "Dear Professor PrivateContextMarker, " };
+    const response = await f.handler(transcriptionRequest(makeWav(1), f.browser.android.accessToken, "https://worker.test", { context }), f.environment);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ contextDecision: { purpose: "email", audience: "academic", nearbyTextUsed: true } });
+    expect(JSON.stringify(body)).not.toContain("PrivateContextMarker");
+    expect(f.services.polish).toHaveBeenLastCalledWith(f.environment, "hello", expect.objectContaining({ context }), expect.any(AbortSignal), expect.any(Object));
+    const activity = await env.DB.prepare("SELECT * FROM user_activity_events").all();
+    const audits = await env.DB.prepare("SELECT * FROM admin_audit_events").all();
+    expect(JSON.stringify([activity.results, audits.results])).not.toContain("PrivateContextMarker");
+  });
+
+  it("strips nearby text or all context according to the published admin switches", async () => {
+    const f = await workspaceFixture();
+    const config = defaultAiConfiguration(); config.context.allowNearbyText = false;
+    let saved = await (await f.save(config)).json() as { draft: { id: string } };
+    await f.publish(saved.draft, 1);
+    const context = { version: 1, level: "nearby", purpose: "email", audience: "academic", source: "nearby", style: "auto", before: "Dear Professor PrivateContextMarker, " };
+    const send = () => f.handler(transcriptionRequest(makeWav(1), f.browser.android.accessToken, "https://worker.test", { context }), f.environment);
+    expect(await (await send()).json()).toMatchObject({ contextDecision: { level: "app", audience: "unknown", nearbyTextUsed: false } });
+    expect(vi.mocked(f.services.polish).mock.calls.at(-1)?.[2].context).not.toHaveProperty("before");
+    config.context.enabled = false;
+    saved = await (await f.save(config, 2)).json() as { draft: { id: string } };
+    await f.publish(saved.draft, 3);
+    expect(await (await send()).json()).not.toHaveProperty("contextDecision");
+    expect(vi.mocked(f.services.polish).mock.calls.at(-1)?.[2].context).toBeUndefined();
+  });
+
+  it("bypasses cleanup and its reservation for literal fields and rejects invalid context before AI", async () => {
+    const f = await workspaceFixture();
+    const context = { version: 1, level: "app", purpose: "search", audience: "unknown", source: "field", style: "auto" };
+    const response = await f.handler(transcriptionRequest(makeWav(1), f.browser.android.accessToken, "https://worker.test", { context }), f.environment);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ polished: false, contextDecision: { purpose: "search", nearbyTextUsed: false } });
+    expect(f.services.polish).not.toHaveBeenCalled();
+    const invalid = await f.handler(transcriptionRequest(makeWav(1), f.browser.android.accessToken, "https://worker.test", { context: { ...context, before: "not permitted" } }), f.environment);
+    expect(invalid.status).toBe(400);
+    expect(f.services.transcribe).toHaveBeenCalledOnce();
+  });
+
+  it("applies context controls and literal bypass to admin preview without writing sample data", async () => {
+    const f = await workspaceFixture();
+    const config = defaultAiConfiguration(); config.context.allowNearbyText = false;
+    const sample = { config, text: "hello", glossary: [], sentenceStart: true, commands: true,
+      context: { version: 1, level: "nearby", purpose: "email", audience: "academic", source: "nearby", style: "auto", before: "Dear Professor PrivateContextMarker, " } };
+    expect(await (await f.call("/preview", sample)).json()).toMatchObject({ contextDecision: { audience: "unknown", level: "app", nearbyTextUsed: false } });
+    vi.mocked(f.services.polish).mockClear();
+    const literal = { ...sample, context: { ...sample.context, purpose: "code" } };
+    expect(await (await f.call("/preview", literal)).json()).toMatchObject({ status: "literal_passthrough" });
+    expect(f.services.polish).not.toHaveBeenCalled();
+  });
 
   it("requires browser admin authentication and CSRF for every new mutation", async () => {
     const fixture = await workspaceFixture();

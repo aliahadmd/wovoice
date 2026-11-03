@@ -1,3 +1,4 @@
+import type { DictationContext } from "./context";
 import type { AiConfiguration } from "./ai-config";
 
 export type AsrModel = "whisper" | "nova-3";
@@ -10,6 +11,7 @@ export interface TranscriptionOptions {
   sentenceStart: boolean;
   commands: Array<"new_line" | "new_paragraph">;
   glossary: string[];
+  context?: DictationContext;
 }
 
 export interface AsrResult {

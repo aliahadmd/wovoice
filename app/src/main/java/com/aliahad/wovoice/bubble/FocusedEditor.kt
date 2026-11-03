@@ -7,6 +7,10 @@ import android.text.SpannedString
 import android.view.accessibility.AccessibilityNodeInfo
 import com.aliahad.wovoice.core.EditorPolicy
 import com.aliahad.wovoice.core.TextCommitPolicy
+import com.aliahad.wovoice.context.ContextCapture
+import com.aliahad.wovoice.context.ContextLevel
+import com.aliahad.wovoice.context.ContextPolicy
+import com.aliahad.wovoice.context.DictationContext
 
 /** Holds exactly the focused editor, never a screen dump or a clipboard fallback. */
 internal class FocusedEditor private constructor(
@@ -19,6 +23,14 @@ internal class FocusedEditor private constructor(
 ) {
     val packageName: String = node.packageName.toString()
     val sentenceStart: Boolean = TextCommitPolicy.isSentenceStartAfter(original.take(minOf(start, end)).takeLast(16))
+
+    fun context(level: ContextLevel, style: String): DictationContext? {
+        if (Build.VERSION.SDK_INT >= 34 && node.isAccessibilityDataSensitive) return null
+        val field = ContextCapture.field(node.inputType)
+        return ContextPolicy.detect(packageName, (if (Build.VERSION.SDK_INT >= 26) node.hintText?.toString() else null).orEmpty(), field, level, style,
+            if (level == ContextLevel.NEARBY && field == "text") original.take(minOf(start, end)).takeLast(512) else "",
+            if (level == ContextLevel.NEARBY && field == "text") original.drop(maxOf(start, end)).take(128) else "")
+    }
 
     fun matches(current: AccessibilityNodeInfo?): Boolean {
         if (current == null || current != node || !isSupported(current, usesInputConnection)) return false

@@ -176,11 +176,14 @@ internal class DictationBubbleView(
         control.updateMotion(motionAllowed, waveformEnabled)
     }
 
-    @Suppress("UNUSED_PARAMETER")
     fun render(text: String, recording: Boolean, processing: Boolean) {
         messageAction = null
         val mode = when { recording -> Mode.RECORDING; processing -> Mode.PROCESSING; else -> Mode.IDLE }
         show(Display(mode))
+        if (recording || processing) {
+            control.contentDescription = "${control.contentDescription}. $text"
+            if (Build.VERSION.SDK_INT >= 26) control.tooltipText = text
+        } else if (Build.VERSION.SDK_INT >= 26) control.tooltipText = null
     }
 
     fun renderMessage(message: String, actionLabel: String? = null, onAction: (() -> Unit)? = null) {

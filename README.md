@@ -32,6 +32,11 @@ WoVoice is tuned for **English (India)**, with special care for South Asian pron
   <img src="docs/images/mac-home.png" width="520" alt="WoVoice Home screen on Mac">
 </p>
 
+
+## Automatic context (next release)
+
+Enable **Automatic context** once in Settings to let WoVoice automatically adapt to the app and text field. You do not need to choose a situation while dictating. App-only access sends a writing-task category; separately enabling **Nearby text** allows a small cursor snippet to guide grammar and tone. Unknown audiences keep your natural voice. Context is not saved in history or sync. See the [feature guide](docs/features/automatic-context.md) for behavior and limits.
+
 ## Contents
 
 - [What WoVoice does for you](#what-wovoice-does-for-you)

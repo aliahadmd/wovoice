@@ -30,6 +30,9 @@ interface Settings {
   middleClickEnabled: boolean
   triggerKey: string
   workerUrl: string
+  contextOwner: string
+  contextLevel: 'off' | 'app' | 'nearby'
+  contextStyle: 'auto' | 'natural' | 'polite' | 'professional' | 'concise'
 }
 
 const TRIGGER_KEY_OPTIONS: Array<{ id: string; label: string }> = [
@@ -97,6 +100,7 @@ function Dashboard(): React.JSX.Element {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [permissions, setPermissions] = useState<Permissions | null>(null)
   const [settings, setSettings] = useState<Settings | null>(null)
+  const [contextConsent, setContextConsent] = useState<{ level: 'app' | 'nearby'; owner: string } | null>(null)
   const [version, setVersion] = useState('')
   const [loginItem, setLoginItem] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -134,6 +138,8 @@ function Dashboard(): React.JSX.Element {
     window.api.getLoginItem().then(setLoginItem)
     refreshPermissions()
     return window.api.onAuthState((state) => {
+      setContextConsent(null)
+      void window.api.settingsGet().then(setSettings).catch(() => setSettings(null))
       setAuth(state)
       if (state.signedIn) loadProfile()
       else setProfile(null)
@@ -277,6 +283,46 @@ function Dashboard(): React.JSX.Element {
               <p>Triggers, permissions, and startup for system-wide dictation.</p>
             </div>
             <div className="card">
+              <h2>Automatic context</h2>
+              <p className="hint">WoVoice detects the writing situation when you start speaking. You do not need to select chat, email, or a recipient each time. Unknown situations keep your natural tone.</p>
+              <div className="stat-row"><label htmlFor="context-level">Context access</label>
+                <select id="context-level" className="select" value={settings?.contextLevel ?? 'off'} onChange={async (event) => {
+                  if (!settings) return
+                  const next = event.target.value as Settings['contextLevel']
+                  setContextConsent(null)
+                  if (next !== 'off') {
+                    setContextConsent({ level: next, owner: settings.contextOwner })
+                  } else if (await window.api.settingsSet('contextLevel', next, settings.contextOwner)) {
+                    setSettings((current) => current?.contextOwner === settings.contextOwner ? { ...current, contextLevel: next } : current)
+                  }
+                }}><option value="off">Off</option><option value="app">App and field only</option><option value="nearby">App, field, and nearby text</option></select>
+              </div>
+              {contextConsent && <div className="card" role="region" aria-label="Context access consent">
+                <h3>{contextConsent.level === 'nearby' ? 'Allow nearby text?' : 'Allow app and field context?'}</h3>
+                <p className="hint">{contextConsent.level === 'nearby'
+                  ? 'When you start dictation, up to 512 characters before and 128 after the selection may be sent to WoVoice’s Cloudflare service with your recording to guide grammar and tone. These snippets are used for that request only and are not saved in history, sync, or logs. Full conversations and contacts are not read.'
+                  : 'When you start dictation, WoVoice detects the app and field locally and sends only a writing-task category, such as chat or email. App names, field labels, and existing text are not sent.'} You can turn this off at any time.</p>
+                <div className="history-actions">
+                  <button className="action secondary" onClick={() => setContextConsent(null)}>Cancel</button>
+                  <button className="action" onClick={async () => {
+                    const pending = contextConsent
+                    if (await window.api.settingsSet('contextLevel', pending.level, pending.owner)) {
+                      setSettings((current) => current?.contextOwner === pending.owner ? { ...current, contextLevel: pending.level } : current)
+                    }
+                    setContextConsent(null)
+                  }}>Allow context</button>
+                </div>
+              </div>}
+              <div className="stat-row"><label htmlFor="context-style">Style preference</label>
+                <select id="context-style" className="select" value={settings?.contextStyle ?? 'auto'} onChange={async (event) => {
+                  if (!settings) return
+                  const next = event.target.value as Settings['contextStyle']
+                  if (await window.api.settingsSet('contextStyle', next, settings.contextOwner)) setSettings((current) => current?.contextOwner === settings.contextOwner ? { ...current, contextStyle: next } : current)
+                }}><option value="auto">Automatic (recommended)</option><option value="natural">Natural</option><option value="polite">Polite</option><option value="professional">Professional</option><option value="concise">Concise</option></select>
+              </div>
+              <p className="hint">Nearby text uses only the focused field. Explicit clues such as “Dear Professor” can guide politeness; an app alone does not identify a relationship. Password fields are excluded. If the target or cursor changes, dictation is discarded.</p>
+            </div>
+            <div className="card">
               <h2>Dictation triggers</h2>
               <div className="stat-row">
                 <span className="label">Hold-to-talk key</span>
@@ -323,9 +369,9 @@ function Dashboard(): React.JSX.Element {
             <div className="card">
               <h2>Permissions &amp; access</h2>
               <p className="hint">
-                WoVoice asks for exactly two macOS permissions — the same ones Wispr Flow
-                needs. Nothing else: it never reads your screen, files, or browsing. Both are
-                granted once and stay.
+                Microphone access records your voice when you start dictation. Accessibility
+                supports the trigger key, checks the insertion target, and reads optional focused-editor
+                context when you enable it above. WoVoice does not capture screen images, files, or browsing history.
               </p>
               <div className="stat-row">
                 <span className="label">
@@ -354,8 +400,9 @@ function Dashboard(): React.JSX.Element {
               <p className="hint">
                 This is the Accessibility permission (System Settings → Privacy &amp; Security →
                 Device Control &amp; Data Access). It lets WoVoice watch for your chosen trigger
-                key in any app and paste the finished text at your cursor. It does not read your
-                screen or send anything anywhere.
+                key in any app and paste the finished text at your cursor. The focused editor is
+                checked locally to prevent insertion into a changed field. Optional context access
+                controls what editor information can accompany a recording.
               </p>
               <p>
                 <button

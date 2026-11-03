@@ -40,6 +40,7 @@ import com.aliahad.wovoice.R
 import com.aliahad.wovoice.account.AccountResult
 import com.aliahad.wovoice.account.SessionManager
 import com.aliahad.wovoice.core.EditorSessionGuard
+import com.aliahad.wovoice.context.DictationContext
 import com.aliahad.wovoice.data.AndroidGraph
 import com.aliahad.wovoice.network.TranscriptionClient
 import com.aliahad.wovoice.settings.SecretStore
@@ -87,6 +88,7 @@ class BubbleAccessibilityService : AccessibilityService() {
     private var refreshScheduled = false
     private var recordingStartedAt = 0L
     private var captureOwner: String? = null
+    private var capturedContext: DictationContext? = null
     private var retry: RetryRecording? = null
     private var screenReceiverRegistered = false
     private val exitingBubbles = mutableSetOf<DictationBubbleView>()
@@ -381,12 +383,13 @@ class BubbleAccessibilityService : AccessibilityService() {
         target = editor
         targetInput = connection
         captureOwner = settings.accountId
+        capturedContext = if (Build.VERSION.SDK_INT >= 33 && connection?.allowsContext == false) null else editor.context(settings.contextLevel, settings.contextStyle)
         captureSession = sessions.begin()
         val session = captureSession
         state = State.RECORDING
         recordingStartedAt = SystemClock.elapsedRealtime()
         handler.post(recordingClock)
-        bubble?.render("Tap to finish", recording = true, processing = false)
+        bubble?.render(capturedContext?.label?.let { "$it · Tap to finish" } ?: "Tap to finish", recording = true, processing = false)
         try {
             promoteRecording()
             val file = File(cacheDir, "$FILE_PREFIX${System.nanoTime()}.wav")
@@ -442,6 +445,7 @@ class BubbleAccessibilityService : AccessibilityService() {
                     is TranscriptionClient.Result.Success -> {
                         result.file.delete()
                         retry = null
+                        capturedContext = null
                         handler.removeCallbacks(expireRetry)
                         val profile = withContext(Dispatchers.IO) { account.loadProfile() }
                         if (!sessions.isActive(session) || !targetIsCurrent()) return@launch
@@ -498,7 +502,7 @@ class BubbleAccessibilityService : AccessibilityService() {
                 val retained = state == State.RETRY && retry?.result?.file == result.file && sessions.isActive(session)
                 if (!retained) result.file.delete()
                 if (sessions.isActive(session)) {
-                    if (!retained) activeFile = null
+                    if (!retained) { activeFile = null; capturedContext = null }
                     if (state == State.PROCESSING) {
                         target = null
                         targetInput = null
@@ -546,10 +550,12 @@ class BubbleAccessibilityService : AccessibilityService() {
         if (auth is AccountResult.Error) return TranscriptionClient.Result.Error(auth.message, auth.retryable, auth.code, auth.status)
         val token = (auth as AccountResult.Success).value
         val glossary = repository.bestGlossary()
-        val first = client.transcribe(settings.workerUrl, token, file, sentenceStart, glossary)
+        val context = capturedContext?.takeIf { captureOwner == settings.accountId }?.restricted(settings.contextLevel)?.copy(style = settings.contextStyle)
+        if (captureOwner != settings.accountId) return TranscriptionClient.Result.Error("Account changed. Speak again.", false)
+        val first = client.transcribe(settings.workerUrl, token, file, sentenceStart, glossary, context)
         if (first !is TranscriptionClient.Result.Error || first.code !in setOf("TOKEN_EXPIRED", "AUTH_REQUIRED")) return first
         return when (val refreshed = account.refreshAfterRejected(token)) {
-            is AccountResult.Success -> client.transcribe(settings.workerUrl, refreshed.value, file, sentenceStart, glossary)
+            is AccountResult.Success -> if (captureOwner != settings.accountId) TranscriptionClient.Result.Error("Account changed. Speak again.", false) else client.transcribe(settings.workerUrl, refreshed.value, file, sentenceStart, glossary, context?.restricted(settings.contextLevel))
             is AccountResult.Error -> TranscriptionClient.Result.Error(refreshed.message, refreshed.retryable, refreshed.code, refreshed.status)
         }
     }
@@ -569,6 +575,7 @@ class BubbleAccessibilityService : AccessibilityService() {
         target = null
         targetInput = null
         captureOwner = null
+        capturedContext = null
         state = State.IDLE
         stopRecordingNotification()
         renderIdle()

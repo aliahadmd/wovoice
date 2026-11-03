@@ -1,5 +1,7 @@
 package com.aliahad.wovoice.settings
 
+import com.aliahad.wovoice.context.ContextLevel
+import com.aliahad.wovoice.context.ContextPolicy
 import android.content.Context
 import com.aliahad.wovoice.BuildConfig
 import com.aliahad.wovoice.account.AccountSettings
@@ -67,6 +69,15 @@ class SettingsStore(context: Context) : AccountSettings {
     var waveformEnabled: Boolean
         get() = preferences.getBoolean(KEY_WAVEFORM, true)
         set(value) = preferences.edit().putBoolean(KEY_WAVEFORM, value).apply()
+
+    /** Consent is account-scoped and off for existing installations until enabled. */
+    var contextLevel: ContextLevel
+        get() = ContextLevel.from(preferences.getString("context_level_${accountId ?: "local"}", "off"))
+        set(value) = preferences.edit().putString("context_level_${accountId ?: "local"}", value.wire).apply()
+
+    var contextStyle: String
+        get() = preferences.getString("context_style_${accountId ?: "local"}", "auto").takeIf { it in ContextPolicy.styles } ?: "auto"
+        set(value) = preferences.edit().putString("context_style_${accountId ?: "local"}", value.takeIf { it in ContextPolicy.styles } ?: "auto").apply()
 
     var floatingBubbleEnabled: Boolean
         get() = preferences.getBoolean(KEY_FLOATING_BUBBLE, false)

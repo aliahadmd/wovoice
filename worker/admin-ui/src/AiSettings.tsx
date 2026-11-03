@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AI_MODEL_CATALOG, AiConfigValidationError, changedConfigFields, validateAiConfiguration, type AiConfiguration, type AiRevision } from "../../src/ai-config";
 import { AdminApiError, adminApi } from "./api";
 import { Dialog } from "./Dialog";
+import { CONTEXT_PURPOSES, CONTEXT_AUDIENCES, CONTEXT_STYLES, boundedSnippets, type DictationContext } from "../../src/context";
 import "./ai-settings.css";
 
 export interface AiWorkspace {
@@ -12,12 +13,14 @@ export interface AiWorkspace {
 interface RevisionSummary extends Omit<AiRevision, "config"> { asrModel: string; cleanupModel: string; serviceEnabled: boolean; cleanupEnabled: boolean }
 interface TestResult {
   text: string; candidate: string | null; accepted: boolean; status: string; latencyMs: number;
+  contextDecision?: { purpose: string; audience: string; style: string; source: string; nearbyTextUsed: boolean };
   messages: Array<{ role: string; content: string }>;
   usage: { inputTokens: number; outputTokens: number; neurons: number; estimatedCostUsd: number } | null;
 }
-type Section = "recognition" | "cleanup" | "prompts" | "test" | "availability" | "history";
-const SECTIONS: Array<[Section, string]> = [["recognition", "Speech recognition"], ["cleanup", "Text cleanup"], ["prompts", "Prompts"], ["test", "Test workspace"], ["availability", "Availability"], ["history", "Revisions"]];
+type Section = "recognition" | "cleanup" | "prompts" | "test" | "availability" | "history" | "context";
+const SECTIONS: Array<[Section, string]> = [["recognition", "Speech recognition"], ["cleanup", "Text cleanup"], ["prompts", "Prompts"], ["test", "Test workspace"], ["availability", "Availability"], ["history", "Revisions"], ["context", "Automatic context"]];
 const LABELS: Record<string, string> = {
+  "context.enabled": "Automatic context", "context.allowNearbyText": "Nearby text context",
   "asr.model": "Speech recognition model", "asr.glossaryPrompt": "Vocabulary hint prompt", "cleanup.model": "Cleanup model",
   "cleanup.enabled": "Text cleanup", "cleanup.systemPrompt": "System prompt", "cleanup.userPromptTemplate": "User prompt template",
   "cleanup.commandsPrompt": "Spoken command instruction", "cleanup.noCommandsPrompt": "No-command instruction", "cleanup.temperature": "Temperature",
@@ -36,6 +39,8 @@ export function AiSettings({ onDirtyChange }: { onDirtyChange(dirty: boolean): v
   const [historyBusy, setHistoryBusy] = useState(false);
   const [sample, setSample] = useState("um please send the invoice for 2500 rupees tomorrow");
   const [glossary, setGlossary] = useState(""); const [sentenceStart, setSentenceStart] = useState(true); const [commands, setCommands] = useState(true);
+  const [sampleContext, setSampleContext] = useState<DictationContext>({ version: 1, level: "app", purpose: "unknown", audience: "unknown", source: "unknown", style: "auto" });
+  const [testContextEnabled, setTestContextEnabled] = useState(false);
   const [testBusy, setTestBusy] = useState(false); const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [testedFingerprint, setTestedFingerprint] = useState("");
   const live = data?.effective;
@@ -51,7 +56,7 @@ export function AiSettings({ onDirtyChange }: { onDirtyChange(dirty: boolean): v
   const changes = live && config ? changedConfigFields(live, config) : [];
   const current = useRef(true);
   const loadSequence = useRef(0);
-  const evaluationFingerprint = JSON.stringify({ config, sample, glossary, sentenceStart, commands });
+  const evaluationFingerprint = JSON.stringify({ config, sample, glossary, sentenceStart, commands, context: testContextEnabled ? sampleContext : undefined });
 
   useEffect(() => { current.current = true; void load(); return () => { current.current = false; onDirtyChange(false); }; }, []);
   useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
@@ -111,7 +116,7 @@ export function AiSettings({ onDirtyChange }: { onDirtyChange(dirty: boolean): v
     if (!config || !valid) return;
     setTestBusy(true); setTestResult(null); setError(""); const snapshot = evaluationFingerprint;
     try {
-      const result = await adminApi<TestResult>("/ai/preview", { method: "POST", body: { config, text: sample, glossary: glossary.split(",").map((term) => term.trim()).filter(Boolean), sentenceStart, commands } });
+      const result = await adminApi<TestResult>("/ai/preview", { method: "POST", body: { config, text: sample, glossary: glossary.split(",").map((term) => term.trim()).filter(Boolean), sentenceStart, commands, ...(testContextEnabled ? { context: sampleContext } : {}) } });
       if (current.current) { setTestResult(result); setTestedFingerprint(snapshot); }
     } catch (value) { if (current.current) setError(message(value)); }
     finally { if (current.current) setTestBusy(false); }
@@ -153,9 +158,23 @@ export function AiSettings({ onDirtyChange }: { onDirtyChange(dirty: boolean): v
           <Field label="Sample transcript"><textarea rows={5} maxLength={4000} value={sample} onChange={(event) => setSample(event.target.value)} /></Field>
           <Field label="Protected vocabulary" help="Comma-separated terms · up to 30 terms for a test."><input value={glossary} maxLength={2400} onChange={(event) => setGlossary(event.target.value)} placeholder="WoVoice, Bengaluru" /></Field>
           <div className="ai-field-grid"><Toggle label="Start of a sentence" checked={sentenceStart} onChange={setSentenceStart} /><Toggle label="Spoken formatting commands" checked={commands} onChange={setCommands} /></div>
+          <Toggle label="Test automatic context" help="Synthetic test data only. Production clients detect these signals automatically." checked={testContextEnabled} onChange={setTestContextEnabled} />
+          {testContextEnabled && <div className="ai-callout">
+            <div className="ai-field-grid"><Field label="Context access"><select value={sampleContext.level} onChange={(event) => setSampleContext({ ...sampleContext, level: event.target.value === "nearby" ? "nearby" : "app", audience: "unknown", source: "field", before: undefined, after: undefined })}><option value="app">App and field only</option><option value="nearby">Nearby text</option></select></Field>
+            <Field label="Writing task"><select value={sampleContext.purpose} onChange={(event) => setSampleContext({ ...sampleContext, purpose: event.target.value as DictationContext["purpose"], source: "field" })}>{CONTEXT_PURPOSES.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field>
+            <Field label="Style preference"><select value={sampleContext.style} onChange={(event) => setSampleContext({ ...sampleContext, style: event.target.value as DictationContext["style"] })}>{CONTEXT_STYLES.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field>
+            {sampleContext.level === "nearby" && <Field label="Audience clue"><select value={sampleContext.audience} onChange={(event) => setSampleContext({ ...sampleContext, audience: event.target.value as DictationContext["audience"], source: "nearby" })}>{CONTEXT_AUDIENCES.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field>}</div>
+            {sampleContext.level === "nearby" && <><Field label="Before selection" help="Use invented text for tests · maximum 512 characters."><textarea rows={3} maxLength={512} value={sampleContext.before ?? ""} onChange={(event) => setSampleContext({ ...sampleContext, before: undefined, after: undefined, ...boundedSnippets(event.target.value, sampleContext.after ?? "") })} /></Field><Field label="After selection"><input maxLength={128} value={sampleContext.after ?? ""} onChange={(event) => setSampleContext({ ...sampleContext, before: undefined, after: undefined, ...boundedSnippets(sampleContext.before ?? "", event.target.value) })} /></Field></>}
+          </div>}
           <button className="primary-button" disabled={testBusy || !valid || !sample.trim()} onClick={() => void test()}>{testBusy ? "Testing cleanup…" : "Run cleanup test"}</button>
           {!valid && <p className="ai-field-error">Fix the configuration errors before testing.</p>}
-          {testResult && <div className="ai-test-result" aria-live="polite"><div className="panel-heading"><h3>{testResult.status === "cleanup_disabled" ? "Recognition text · cleanup is off" : testResult.accepted ? "Passed output checks" : "Recognition text retained"}</h3><span className="status-pill">{testResult.latencyMs} ms</span></div>{testedFingerprint !== evaluationFingerprint && <p className="ai-field-error">Settings or sample changed since this test. Run again to evaluate the current draft.</p>}<pre>{testResult.text}</pre>{testResult.status === "guardrail_fallback" && <p className="ai-hint">The candidate did not pass WoVoice’s output checks. It would not be inserted.</p>}{testResult.candidate && testResult.status === "guardrail_fallback" && <details><summary>Rejected candidate</summary><pre>{testResult.candidate}</pre></details>}{testResult.usage && <p className="ai-hint">{testResult.usage.inputTokens} input · {testResult.usage.outputTokens} output tokens · estimated ${testResult.usage.estimatedCostUsd.toFixed(6)}</p>}<details><summary>Rendered model messages</summary>{testResult.messages.map((item) => <div key={item.role}><h4>{item.role}</h4><pre>{item.content}</pre></div>)}</details></div>}
+          {testResult && <div className="ai-test-result" aria-live="polite"><div className="panel-heading"><h3>{testResult.status === "literal_passthrough" ? "Recognition text · literal field" : testResult.status === "cleanup_disabled" ? "Recognition text · cleanup is off" : testResult.accepted ? "Passed output checks" : "Recognition text retained"}</h3><span className="status-pill">{testResult.latencyMs} ms</span></div>{testedFingerprint !== evaluationFingerprint && <p className="ai-field-error">Settings or sample changed since this test. Run again to evaluate the current draft.</p>}<pre>{testResult.text}</pre>{testResult.contextDecision && <p className="ai-hint">Applied context: {testResult.contextDecision.purpose} · {testResult.contextDecision.audience} · {testResult.contextDecision.style} · Nearby text {testResult.contextDecision.nearbyTextUsed ? "used" : "not used"}</p>}{testResult.status === "guardrail_fallback" && <p className="ai-hint">The candidate did not pass WoVoice’s output checks. It would not be inserted.</p>}{testResult.candidate && testResult.status === "guardrail_fallback" && <details><summary>Rejected candidate</summary><pre>{testResult.candidate}</pre></details>}{testResult.usage && <p className="ai-hint">{testResult.usage.inputTokens} input · {testResult.usage.outputTokens} output tokens · estimated ${testResult.usage.estimatedCostUsd.toFixed(6)}</p>}<details><summary>Rendered model messages</summary>{testResult.messages.map((item) => <div key={item.role}><h4>{item.role}</h4><pre>{item.content}</pre></div>)}</details></div>}
+        </Card>}
+        {section === "context" && <Card kicker="07 · AUTOMATIC CONTEXT" title="Adapt to the writing situation" detail="Clients detect the app and field locally when a recording starts. Context access is an optional, account-specific privacy choice; users do not select a situation for each dictation.">
+          <Toggle label="Enable automatic context" help="Apply writing-task and style signals from opted-in clients. Publishing off ignores incoming context and retains ordinary cleanup." checked={config.context.enabled} onChange={(enabled) => change({ ...config, context: { ...config.context, enabled } })} />
+          <Toggle label="Allow nearby text context" help="Use bounded cursor snippets only when the user separately enables Nearby text. Publishing off strips snippets and audience clues before cleanup." checked={config.context.allowNearbyText} onChange={(allowNearbyText) => change({ ...config, context: { ...config.context, allowNearbyText } })} />
+          <div className="ai-callout"><strong>Conservative by default</strong><p>WhatsApp, Messenger, and WeChat suggest chat; they do not reveal whether the recipient is a friend or professor. Explicit salutations may suggest a tone. Unknown situations preserve the speaker’s voice.</p><p>Search, literal, and code fields bypass prose cleanup. App identities stay on the device. Up to 512 characters before and 128 after the selection may be used transiently; context is excluded from history, sync, and logs.</p></div>
+          <button className="secondary-button" onClick={() => setSection("test")}>Try a context sample</button>
         </Card>}
         {section === "availability" && <Card kicker="05 · AVAILABILITY" title="Control the dictation service" detail="Pause new dictations during maintenance, or adjust the inference deadline. Sign-in and cloud sync continue to work.">
           <Toggle label="Accept new dictations" help="Turning this off takes effect only after publishing. In-flight recordings keep their original configuration." checked={config.service.enabled} onChange={(enabled) => change({ ...config, service: { ...config.service, enabled } })} />

@@ -11,8 +11,9 @@ const APPLESCRIPT_TIMEOUT_MS = 5_000
  * The previous clipboard contents (text or image) are restored even when the
  * keystroke fails, so a failed paste never leaves the dictated text behind.
  */
-export async function pasteText(text: string): Promise<void> {
+export async function pasteText(text: string, validate: () => Promise<boolean>): Promise<void> {
   if (text.length === 0) return
+  if (!(await validate())) throw new Error('EDITOR_CHANGED')
   const previousText = clipboard.readText()
   const hasImage = clipboard
     .availableFormats()
@@ -21,6 +22,7 @@ export async function pasteText(text: string): Promise<void> {
   clipboard.writeText(text)
   try {
     await sleep(PASTE_SETTLE_MS)
+    if (!(await validate())) throw new Error('EDITOR_CHANGED')
     await new Promise<void>((resolve, reject) => {
       execFile(
         'osascript',

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Automatic context
+
+- Added automatic writing-task detection for Android keyboard/bubble and Mac dictation, including chat, email, subjects, posts, comments, notes, and literal fields. No situation selection is needed while dictating; uncertain cases keep your natural voice.
+- Added account-specific context consent and an optional style preference. App-only mode sends categories; separately enabled Nearby text uses bounded cursor snippets for one request without adding them to history, sync, or logs.
+- Added admin context switches and synthetic context tests. Existing requests and saved AI revisions remain compatible; no live model or prompt revision is changed by the feature.
+- Mac dictation checks the original app, focused editor, cursor, and text before pasting and discards stale results. Unsupported or secure editors fail safely.
+- Improved short grammar repairs while protecting negation, uncertainty, numeric formatting, and approved vocabulary from cleanup changes.
+
 ### Website
 
 - Expanded the product video to 37 seconds, including Mac dictation and the admin console, with matching website media and editable video sources.

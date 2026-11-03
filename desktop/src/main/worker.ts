@@ -1,3 +1,4 @@
+import type { DictationContext } from './context'
 /** Worker REST client (main process, Node fetch). Same API the phone uses. */
 
 // Bounds for every request — a hung socket must fail the session (the
@@ -273,7 +274,9 @@ export class WorkerClient {
   async transcribe(
     accessToken: string,
     wav: Buffer,
-    glossary: string[]
+    glossary: string[],
+    context?: DictationContext,
+    sentenceStart = true
   ): Promise<{
     text: string
     rawText: string
@@ -289,7 +292,8 @@ export class WorkerClient {
       JSON.stringify({
         locale: 'en-IN',
         polish: 'light',
-        sentenceStart: true,
+        sentenceStart,
+        context,
         commands: ['new_line', 'new_paragraph'],
         glossary: glossary.slice(0, 100)
       })

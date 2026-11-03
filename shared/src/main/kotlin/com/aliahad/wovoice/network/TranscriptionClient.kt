@@ -1,5 +1,6 @@
 package com.aliahad.wovoice.network
 
+import com.aliahad.wovoice.context.DictationContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -66,6 +67,7 @@ class TranscriptionClient {
         audioFile: File,
         sentenceStart: Boolean,
         glossary: List<String>,
+        context: DictationContext? = null,
     ): Result {
         val url = endpoint(baseUrl, "/v1/transcriptions") ?: return invalidUrl()
         val boundary = "WoVoice-${UUID.randomUUID()}"
@@ -87,6 +89,7 @@ class TranscriptionClient {
                         .put("sentenceStart", sentenceStart)
                         .put("commands", JSONArray(listOf("new_line", "new_paragraph")))
                         .put("glossary", JSONArray(glossary.take(100)))
+                        .apply { context?.let { value -> put("context", JSONObject().put("version", 1).put("level", value.level).put("purpose", value.purpose).put("audience", value.audience).put("source", value.source).put("style", value.style).apply { value.before?.let { put("before", it) }; value.after?.let { put("after", it) } }) } }
                         .toString(),
                 )
                 output.write("--$boundary\r\n".toByteArray())

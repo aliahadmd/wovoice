@@ -32,6 +32,8 @@ for (let i = 0; i < BAR_COUNT; i++) {
 type UiState = 'idle' | 'recording' | 'processing' | 'success' | 'error' | 'cancelled'
 let uiState: UiState = 'idle'
 
+let sessionId = 0
+let transcriptionLabel = 'Transcribing…'
 let chunks: Float32Array[] = []
 let detector: SpeechSignalDetector | null = null
 let audioContext: AudioContext | null = null
@@ -100,13 +102,13 @@ function enterRecording(releaseHint: string): void {
   for (const bar of bars) bar.style.height = '5px'
 }
 
-async function begin(): Promise<void> {
+async function begin(id: number): Promise<void> {
   if (running()) return
   // Claim the session synchronously: a release that lands while the mic is
   // still starting must not leave a ghost recording running after finish().
   runningFlag.value = true
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
+    const opened = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
         echoCancellation: true,
@@ -114,24 +116,30 @@ async function begin(): Promise<void> {
         autoGainControl: true
       }
     })
+    if (id !== sessionId || !running()) { opened.getTracks().forEach((track) => track.stop()); return }
+    mediaStream = opened
   } catch {
+    if (id !== sessionId || !running()) return
+    window.api.overlay.fail('Microphone access was denied. Enable it and try again.', id)
     runningFlag.value = false
     fail('Microphone access was denied. Enable it and try again.')
     return
   }
-  if (!running()) {
+  if (!running() || id !== sessionId) {
     // Cancelled while getUserMedia was pending — release the device we opened.
     teardownAudio()
     return
   }
 
   chunks = []
-  audioContext = new AudioContext()
+  const openedContext = new AudioContext()
+  audioContext = openedContext
   // Chromium starts contexts suspended without user activation; the overlay
   // is never focused, so resume explicitly or no audio callbacks ever fire.
-  if (audioContext.state === 'suspended') await audioContext.resume()
-  if (!running()) {
-    teardownAudio()
+  if (openedContext.state === 'suspended') await openedContext.resume()
+  if (!running() || id !== sessionId) {
+    if (audioContext === openedContext) teardownAudio()
+    else void openedContext.close()
     return
   }
   detector = new SpeechSignalDetector(audioContext.sampleRate)
@@ -157,7 +165,7 @@ async function begin(): Promise<void> {
   // "recording" state, so it discarded the WAV and the dictation was lost.
   autoStop = setTimeout(() => {
     autoStop = null
-    window.api.overlay.autoStop()
+    window.api.overlay.autoStop(id)
   }, MAX_DURATION_MS)
 }
 
@@ -186,7 +194,7 @@ function enterProcessing(): void {
   setSub('')
   phaseTimers.push(
     setTimeout(() => {
-      if (uiState === 'processing') setLine('Transcribing…')
+      if (uiState === 'processing') setLine(transcriptionLabel)
     }, 750)
   )
 }
@@ -265,7 +273,7 @@ function finish(): void {
 
   if (!detection.containsSpeech) {
     console.log('overlay page: speech gate rejected —', JSON.stringify(detection))
-    window.api.overlay.fail('No clear speech detected — try speaking a little longer')
+    window.api.overlay.fail('No clear speech detected — try speaking a little longer', sessionId)
     return
   }
 
@@ -288,6 +296,7 @@ function finish(): void {
   const wav = encodeWav(merged, sampleRate)
   console.log('overlay page: sending WAV,', merged.length, 'samples @', sampleRate, 'Hz')
   window.api.overlay.done({
+    sessionId,
     wav,
     durationMs: Math.min(detection.durationMs, MAX_DURATION_MS),
     containsSpeech: detection.containsSpeech
@@ -296,7 +305,7 @@ function finish(): void {
 
 function cancelCapture(): void {
   discardCapture()
-  window.api.overlay.cancelled()
+  window.api.overlay.cancelled(sessionId)
 }
 
 function teardownAudio(): void {
@@ -307,17 +316,21 @@ function teardownAudio(): void {
   settleBars()
 }
 
-window.api.overlay.onBegin((releaseHint) => {
+window.api.overlay.onBegin((releaseHint, id) => {
+  discardCapture()
+  sessionId = id
+  transcriptionLabel = 'Transcribing…'
   clearTimers(stateTimers)
   pill.classList.remove('closing')
   enterRecording(releaseHint)
-  void begin()
+  void begin(id)
 })
 window.api.overlay.onEnd(() => finish())
 window.api.overlay.onState((state) => {
   if (state.state === 'transcribing') {
     // Main picked the capture up; keep the processing visuals going.
-    if (uiState === 'processing') setLine('Transcribing…')
+    transcriptionLabel = state.contextLabel && state.contextLabel !== 'Context off' ? `Transcribing · ${state.contextLabel}` : 'Transcribing…'
+    if (uiState === 'processing') setLine(transcriptionLabel)
     return
   }
   if (state.state === 'success') {

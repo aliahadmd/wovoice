@@ -40,6 +40,8 @@ internal class BubbleInputMethod(service: AccessibilityService, private val chan
 
     inner class Target(private val connection: AccessibilityInputConnection, private val session: Long,
         private val ownerPackage: String) {
+        val allowsContext: Boolean get() = isCurrent() && (currentInputEditorInfo?.imeOptions ?: 0) and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING == 0
+
         fun isCurrent(): Boolean = generation == session && currentInputStarted &&
             currentInputEditorInfo?.packageName == ownerPackage
 

@@ -45,6 +45,34 @@ beforeEach(async () => {
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); });
 
 describe("AI administration workflow", () => {
+  it("saves context policy as a draft without changing live behavior", async () => {
+    await click("07Automatic context");
+    const toggle = Array.from(host.querySelectorAll('label')).find((label) => label.textContent?.includes("Allow nearby text context"))!.querySelector('input')!;
+    await act(async () => toggle.click());
+    await fill("Change note", "Disable nearby text during evaluation");
+    await click("Save draft");
+    expect(data.draft?.config.context.allowNearbyText).toBe(false);
+    expect(data.effective.context.allowNearbyText).toBe(true);
+  });
+  it("sends synthetic context to preview and strips snippets when app-only is selected", async () => {
+    await click("04Test workspace");
+    const toggle = Array.from(host.querySelectorAll('label')).find((label) => label.textContent?.includes("Test automatic context"))!.querySelector('input')!;
+    await act(async () => toggle.click());
+    async function select(label: string, value: string) {
+      const field = Array.from(host.querySelectorAll('label')).find((item) => item.querySelector('span')?.textContent === label)!.querySelector('select')!;
+      await act(async () => { field.value = value; field.dispatchEvent(new Event('change', { bubbles: true })); });
+    }
+    await select("Context access", "nearby"); await select("Writing task", "email");
+    await select("Audience clue", "academic"); await fill("Before selection", "Dear Professor Example, ");
+    await click("Run cleanup test");
+    expect(api.mock.calls.at(-1)?.[1]?.body).toMatchObject({ context: { level: "nearby", purpose: "email", audience: "academic", before: "Dear Professor Example, " } });
+    await select("Context access", "app"); await click("Run cleanup test");
+    const body = api.mock.calls.at(-1)?.[1]?.body as { context: Record<string, unknown> };
+    expect(body.context).toMatchObject({ level: "app", audience: "unknown" });
+    expect(body.context.before).toBeUndefined();
+    expect(body.context.after).toBeUndefined();
+  });
+
   it("saves a draft independently of live settings and requires explicit review to publish", async () => {
     await click("03Prompts");
     await fill("System prompt", "Clean punctuation and preserve every word and number.");

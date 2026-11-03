@@ -1,5 +1,6 @@
+import { contextSkipsCleanup, restrictContext } from "./context";
 import { ApiError, errorResponse } from "./errors";
-import { assertPolishInputFits, cleanupPricing, type CleanupModel } from "./ai-config";
+import { preparePolishContext, cleanupPricing, type CleanupModel } from "./ai-config";
 import { readActiveAiConfiguration } from "./ai-config-store";
 import { handleAdminRoute, productionAdminServices } from "./admin";
 import { authenticateAccess, handleAccountRoute, handleAuthRoute, productionAuthServices } from "./auth";
@@ -157,11 +158,12 @@ export function createHandler(
         throw new ApiError(400, "INVALID_REQUEST", false, "The audio recording is missing.");
       }
       const options = parseOptions(form.get("options"));
+      options.context = config.context.enabled ? restrictContext(options.context, config.context.allowNearbyText ? "nearby" : "app") : undefined;
       const audio = await file.arrayBuffer();
       audioBytes = audio.byteLength;
       const wav = validateWav(audio);
       audioSeconds = wav.durationSeconds;
-      reservation = await reserveQuota(env, principal.userId, requestId, wav.durationSeconds, config);
+      reservation = await reserveQuota(env, principal.userId, requestId, wav.durationSeconds, contextSkipsCleanup(options.context) ? { ...config, cleanup: { ...config.cleanup, enabled: false } } : config);
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort("inference timeout"), config.service.timeoutMs);
@@ -173,16 +175,19 @@ export function createHandler(
 
         let finalText = result.text.trim();
         let polished = false;
+        let nearbyTextUsed = false;
         let polishTokens: { input: number; output: number } | null = { input: 0, output: 0 };
         const polishStartedAt = performance.now();
-        if (config.cleanup.enabled) try {
-          assertPolishInputFits(config, finalText, options);
+        if (config.cleanup.enabled && !contextSkipsCleanup(options.context)) try {
+          const prepared = preparePolishContext(config, finalText, options);
+          options.context = prepared.context;
+          nearbyTextUsed = !!(options.context?.before || options.context?.after);
           polishTokens = null; // An attempted call without token usage must retain a conservative charge.
           const candidate = await services.polish(env, finalText, options, controller.signal, config);
           if (candidate.inputTokens !== null && candidate.outputTokens !== null) {
             polishTokens = { input: candidate.inputTokens, output: candidate.outputTokens };
           }
-          const safe = chooseSafePolish(finalText, candidate.text);
+          const safe = chooseSafePolish(finalText, candidate.text, options.glossary);
           if (safe !== null) {
             polished = safe !== finalText;
             finalText = safe;
@@ -211,6 +216,7 @@ export function createHandler(
             polished,
             asrModel: selectedModel,
             configurationRevision: aiRevisionId,
+            ...(options.context ? { contextDecision: { purpose: options.context.purpose, audience: options.context.audience, source: options.context.source, style: options.context.style, level: options.context.level, nearbyTextUsed } } : {}),
             timingsMs: {
               asr: asrMs,
               polish: polishMs,
