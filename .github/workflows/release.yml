@@ -161,8 +161,8 @@ jobs:
       - name: Build DMG
         working-directory: desktop
         env:
-          # CI has no access to the maintainer's personal Apple Development
-          # identity; ship unsigned unless a dedicated identity is configured.
+          # CI uses a Developer ID identity when configured, otherwise an
+          # explicit ad-hoc signature with its own runtime entitlements.
           WOVOICE_MAC_IDENTITY: ${{ secrets.WOVOICE_MAC_IDENTITY }}
         run: |
           set -euo pipefail
@@ -172,9 +172,24 @@ jobs:
           if [ -n "$WOVOICE_MAC_IDENTITY" ]; then
             ARGS+=("-c.mac.identity=$WOVOICE_MAC_IDENTITY")
           else
-            ARGS+=("-c.mac.identity=null")
+            ARGS+=("-c.mac.identity=-"
+              "-c.mac.entitlements=build/entitlements.adhoc.mac.plist"
+              "-c.mac.entitlementsInherit=build/entitlements.adhoc.mac.plist")
           fi
           npx electron-builder "${ARGS[@]}"
+
+      - name: Verify macOS release bundle
+        run: |
+          set -euo pipefail
+          APP=$(find desktop/dist -maxdepth 2 -type d -name WoVoice.app -print -quit)
+          test -n "$APP"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "$DESKTOP_VERSION"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          for HELPER in tapd contextd; do
+            test -x "$APP/Contents/Resources/$HELPER"
+            codesign --verify --strict --verbose=2 "$APP/Contents/Resources/$HELPER"
+          done
+          ELECTRON_RUN_AS_NODE=1 "$APP/Contents/MacOS/WoVoice" -e 'if (!process.versions.electron) process.exit(1); console.log("Electron runtime loaded:", process.versions.electron)'
 
       - name: Publish desktop release
         env:

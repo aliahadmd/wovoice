@@ -56,5 +56,4 @@ npm run build:mac    # builds native/tapd, bundles, and writes dist/wovoice-desk
 ```
 
 `electron-builder.yml` signs with the maintainer's Apple Development identity, so
-macOS permission grants survive rebuilds. CI builds an unsigned DMG unless the
-`WOVOICE_MAC_IDENTITY` secret is set.
+macOS permission grants survive rebuilds. CI uses explicit ad-hoc signing and verifies the complete app and native helpers before publication when `WOVOICE_MAC_IDENTITY` is absent. The ad-hoc build has a separate entitlements file so hardened runtime stays enabled while Electron frameworks can load. A Developer ID certificate and notarization are still needed for Apple-verified distribution.

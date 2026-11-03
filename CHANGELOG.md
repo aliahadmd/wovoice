@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## Desktop 1.2.1 — 2026-11-03
+
+- Fixed CI packaging to sign the Mac app and native helpers explicitly when a Developer ID identity is not configured. A separate ad-hoc entitlements file keeps hardened runtime enabled and permits Electron’s bundled frameworks.
+- Added bundle, version, and helper signature verification before publishing a Mac release. This replaces the initial 1.2.0 package whose rebuilt bundle did not pass signature verification.
+
 ## 1.8.0 — 2026-11-03 (Desktop 1.2.0)
 
 ### Automatic context
