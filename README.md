@@ -33,7 +33,7 @@ WoVoice is tuned for **English (India)**, with special care for South Asian pron
 </p>
 
 
-## Automatic context (next release)
+## Automatic context
 
 Enable **Automatic context** once in Settings to let WoVoice automatically adapt to the app and text field. You do not need to choose a situation while dictating. App-only access sends a writing-task category; separately enabling **Nearby text** allows a small cursor snippet to guide grammar and tone. Unknown audiences keep your natural voice. Context is not saved in history or sync. See the [feature guide](docs/features/automatic-context.md) for behavior and limits.
 

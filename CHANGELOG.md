@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.8.0 — 2026-11-03 (Desktop 1.2.0)
+
 ### Automatic context
 
 - Added automatic writing-task detection for Android keyboard/bubble and Mac dictation, including chat, email, subjects, posts, comments, notes, and literal fields. No situation selection is needed while dictating; uncertain cases keep your natural voice.

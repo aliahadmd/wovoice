@@ -1,6 +1,6 @@
 # Automatic dictation context
 
-Implemented November 3, 2026. This is the first implementation of the [research proposal](../research/context-aware-dictation-proposal.md), including bounded cursor context. It is faithful dictation, not a message-writing agent.
+Implemented November 3, 2026 for Android 1.8.0 and Mac 1.2.0. This is the first implementation of the [research proposal](../research/context-aware-dictation-proposal.md), including bounded cursor context. It is faithful dictation, not a message-writing agent.
 
 ## What the user does
 
